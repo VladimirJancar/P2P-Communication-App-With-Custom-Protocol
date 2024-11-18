@@ -19,6 +19,7 @@ MAX_FRAGMENT_SIZE = 600 #TODO cant go above
 
 # global ACTIVE = True
 # global SEQENCE_NUMBER = 1
+RUNNING = True
 
 def initiateOrAnswerHandshake(peer_socket, dest_ip, dest_port):
     # Initial SYN Packet
@@ -60,33 +61,91 @@ class Peer:
 
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.socket.bind((self.ip, self.port))
-        self.active = True
+        self.active = False
+        self.handshake_complete = False 
         self.file_transfer = FileTransfer(protocol)
         self.file_receiver = FileReceiver()
 
     def start(self):
         threading.Thread(target=self.receiveMessages).start()
         threading.Thread(target=self.sendMessages).start()
+        self.initiateHandshake()
+
+    def initiateHandshake(self):
+        """
+        Attempt to initiate the handshake process.
+        It will keep trying until the handshake is successful.
+        """
+        print("Attempting handshake...")
+        while not self.handshake_complete:
+            try:
+                
+                self.handshake()
+                time.sleep(1)  # Small delay between handshake attempts
+            except ConnectionResetError:
+                continue
+
+    def handshake(self):
+        """
+        Performs the handshake to establish the connection.
+        """
+        if not self.active:
+            # Initiating the handshake (SYN)
+            syn_packet = Packet(ack_num=0, seq_num=0, syn=1, ack=0, fin=0)
+            self.socket.sendto(syn_packet.toBytes(), (self.dest_ip, self.dest_port))
+            #print("Sent SYN packet.")
+
+            try:
+                self.socket.settimeout(5)  # Set timeout only during handshake
+                data, addr = self.socket.recvfrom(1024)
+                packet = Packet.fromBytes(data)
+
+                if packet.syn == 1 and packet.ack == 1:
+                    print("Received SYN-ACK, sending final ACK.")
+                    ack_packet = Packet(ack_num=packet.seq_num + 1, seq_num=0, ack=1, syn=0, fin=0)
+                    self.socket.sendto(ack_packet.toBytes(), (self.dest_ip, self.dest_port))
+                    self.handshake_complete = True
+                    self.active = True
+                    print("Handshake complete, connection established.")
+
+                elif packet.syn == 1:
+                    # Peer initiated the handshake, respond with SYN-ACK
+                    print("Received SYN, sending SYN-ACK.")
+                    syn_ack_packet = Packet(ack_num=0, seq_num=0, syn=1, ack=1, fin=0)
+                    self.socket.sendto(syn_ack_packet.toBytes(), addr)
+                    self.handshake_complete = True  # Mark handshake as complete when we respond
+                    self.active = True
+
+            except socket.timeout:
+                pass
+        else:
+            # Once connection is established, disable the timeout
+            self.socket.settimeout(None)  # Disable the timeout once handshake is complete
+
+            
 
     def sendPacket(self, dest_ip, dest_port, packet):
         self.socket.sendto(packet.toBytes(), (dest_ip, dest_port))
 
     def receiveMessages(self):
+        while not self.active:
+            continue
         while self.active:
             try:
                 data, addr = self.socket.recvfrom(1024)
                 packet = Packet.fromBytes(data)
                 self.handlePacket(packet, addr)
-
-                if self.file_receiver.file_complete:
-                    self.file_receiver = FileReceiver()
+            except socket.timeout:
+                continue
+                time.sleep(1)  # Sleep before retrying to avoid busy-waiting
             except Exception as e:
                 print(f"Error: {e}")
-            except TimeoutError:
-                continue 
+                time.sleep(1)
 
     def sendMessages(self):
         #TODO break the function
+        while not self.active:
+            continue
         while self.active:
             message = input("\n")
 
