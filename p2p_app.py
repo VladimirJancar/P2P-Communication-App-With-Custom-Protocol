@@ -5,22 +5,22 @@ import struct
 import os
 import time
 
+
+MAX_SEQUENCE_NUMBER = 65535
+MAX_FRAGMENT_SIZE = 600 #TODO cant go above
 #TODO upravit protokol podla bodov v hodnoteni
-#TODO max fragment size 1500B - 20B(IPv4 hlavička) - 8B(UDP hlavička) - X (Hlavička vášho protokolu)
-#TODO pri prenasani suboru preniest aj nazov
 #TODO Pozor na veľkosť poľa "sequence number" / "poradové číslo fragmentu". V požiadavkách máte, že musíte vedieť preniesť 2MB súbor. Keď nastavím veľmi malú veľkosť fragmentu, tak môžete mať povedzme aj 100 000 fragmentov. A také číslo sa vam do 2-bajtového poľa nezmestí. Rátajte s najmenšou veľkosťou fragmentu 1 bajt, pri testovaní zadania môžeme použiť aj túto hodnotu a musí sa vám súbor korektne poslať
 #TODO zistit ako sa robi ethernetove spojenie
 #TODO close connection
 #TODO keep-alive
 #TODO pri /disconnect sa zrusi spojenie
 #TODO arq
+#TODO add packet corruption
 
 # global ACTIVE = True
 # global SEQENCE_NUMBER = 1
 
 def initiateOrAnswerHandshake(peer_socket, dest_ip, dest_port):
-    global ACTIVE
-    global SEQENCE_NUMBER
     # Initial SYN Packet
     while not ACTIVE:
         syn_packet = Packet(ack_num=0, seq_num=SEQENCE_NUMBER, total_fragments=1, ack=0, syn=1, fin=0, err=0, sfs=0, lfg=0, ftr=0, data="")
@@ -61,8 +61,8 @@ class Peer:
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.socket.bind((self.ip, self.port))
         self.active = True
-        self.file_receiver = FileReceiver()
         self.file_transfer = FileTransfer(protocol)
+        self.file_receiver = FileReceiver()
 
     def start(self):
         threading.Thread(target=self.receiveMessages).start()
@@ -77,16 +77,16 @@ class Peer:
                 data, addr = self.socket.recvfrom(1024)
                 packet = Packet.fromBytes(data)
                 self.handlePacket(packet, addr)
-                
+
                 if self.file_receiver.file_complete:
-                    print("File transfer completed.")
-                    self.file_receiver.file_complete = False  # Reset for next file
+                    self.file_receiver = FileReceiver()
             except Exception as e:
                 print(f"Error: {e}")
             except TimeoutError:
                 continue 
 
     def sendMessages(self):
+        #TODO break the function
         while self.active:
             message = input("\n")
 
@@ -100,7 +100,7 @@ class Peer:
                         ack_packet = Packet(ack=1, sfs=1, data=f"Fragment size set to {new_size}")
                         self.sendPacket(self.dest_ip, self.dest_port, ack_packet)
                     else:
-                        print("Invalid fragment size. Must be between 1 and 1500 bytes.")
+                        print(f"Invalid fragment size. Must be between 1 and {MAX_FRAGMENT_SIZE} bytes.")
                 except ValueError:
                     print("Invalid command. Usage: /setfragsize <size>")
 
@@ -126,18 +126,18 @@ class Peer:
 
     def handlePacket(self, packet, addr):
         if packet.ftr == 1:  # File transfer packet
-            print(f"Receiving file fragment {packet.seq_num}")
-            self.file_receiver.receiveFragment(packet, save_path="received_file.txt")
+            #print(f"Receiving file fragment {packet.seq_num}")
+            self.file_receiver.receiveFragment(packet)
         else:
             print(f"\n{addr[0]}:{addr[1]} >> {packet.data}")
 
 
 class Protocol:
-    def __init__(self, frag_size=1):
+    def __init__(self, frag_size=MAX_FRAGMENT_SIZE):
         self.frag_size = frag_size
 
     def setFragmentSize(self, size):
-        if size < 1 or size > 1500: #TODO decide max size
+        if size < 1 or size > MAX_FRAGMENT_SIZE:
             return False
         self.frag_size = size
         return True
@@ -221,12 +221,22 @@ class FileTransfer:
         self.protocol = protocol
 
     def sendFile(self, peer, dest_ip, dest_port, file_path):
-        #print("Sending file...")
         try:
+            filename = os.path.basename(file_path)
             with open(file_path, 'rb') as file:
                 data = file.read()
                 fragments = self.protocol.fragmentData(data.decode('latin1'))
                 total_fragments = len(fragments)
+
+                # Send filename in a separate packet
+                #TODO add to documentation: first packet is total_fragments (8hex digits) + '|' + filename (ftr=1, ack=1)
+                setup_packet = Packet(  # Special sequence number for filename
+                    ftr=1,
+                    ack=1,
+                    lfg=0,
+                    data=f"{total_fragments:08x}|{filename}"
+                )
+                peer.sendPacket(dest_ip, dest_port, setup_packet)
                 
                 for i, fragment in enumerate(fragments):
                     packet = Packet(
@@ -240,7 +250,7 @@ class FileTransfer:
                     # Show progress
                     print(f"\rSent {i + 1}/{total_fragments} packets", end="", flush=True)
                 
-                print("\nFile sent successfully.")  # Move to the next line when done
+                print("\nFile sent successfully.")
                 
         except FileNotFoundError:
             print("File not found.")
@@ -253,32 +263,48 @@ class FileReceiver:
         self.file_fragments = {}  # Stores fragments by sequence number
         self.expected_fragments = None  # Total fragments to expect
         self.file_complete = False
+        self.current_filename = None  # Track the file being received
 
-    def receiveFragment(self, packet, save_path):
+    def receiveFragment(self, packet):
         if packet.ftr != 1: # Non file fragment => ignore
             return
 
-        self.file_fragments[packet.seq_num] = packet.data
+        # Handle filename packet
+        if packet.ack == 1: 
+            try:
+                total_fragments_hex, filename = packet.data.split('|', 1)
+                self.expected_fragments = int(total_fragments_hex, 16)
+                self.current_filename = filename
+                print(f"Receiving file: {filename} ({self.expected_fragments} fragments expected)")
+            except ValueError:
+                print("Error parsing header packet.")
+            return
 
-        if packet.lfg == 1:
-            self.expected_fragments = packet.seq_num
+        else:
+            self.file_fragments[packet.seq_num] = packet.data
 
-        received_fragments = len(self.file_fragments)
-        if self.expected_fragments:
-            # Show progress
-            print(f"\rReceived {received_fragments}/{self.expected_fragments} packets", end="", flush=True)
+            if self.expected_fragments:
+                # Show progress
+                print(f"\rReceived {len(self.file_fragments)}/{self.expected_fragments} packets", end="", flush=True)
 
-        if self.expected_fragments and received_fragments == self.expected_fragments:
-            self.reconstructFile(save_path)
-            self.file_complete = True
-            print("\nFile transfer complete.")  # Move to the next line when done
+            if self.expected_fragments and len(self.file_fragments) == self.expected_fragments:
+                self.reconstructFile()
+                self.file_complete = True
 
 
-    def reconstructFile(self, save_path):
+    def reconstructFile(self):
+        save_path = input("Enter path to save the file << ")
+        if not os.path.exists(save_path):
+            print("Path does not exist, saving to default download directory...")
+            save_path = ""
+        elif save_path[-1:] not in ['\\', '/']:
+            save_path += '\\'
+
+        save_path += self.current_filename
         with open(save_path, 'wb') as f:
             for seq_num in sorted(self.file_fragments.keys()):
                 f.write(self.file_fragments[seq_num].encode('latin1'))
-        print(f"File successfully received and saved as {save_path}.")
+        print(f"File successfully received and saved as \"{save_path}\".")
 
 
 #! type "/disconnect" on both nodes to terminate connection
@@ -290,7 +316,7 @@ if __name__ == '__main__':
     dest_port = int(input("Destination Port: "))
     src_port = int(input("Listening Port: "))
     
-    protocol = Protocol(frag_size=1420)
+    protocol = Protocol(frag_size=MAX_FRAGMENT_SIZE)
     peer = Peer(src_ip, src_port, dest_ip, dest_port, protocol)
 
     peer.start()
