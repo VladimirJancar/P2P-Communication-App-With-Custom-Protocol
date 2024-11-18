@@ -1,0 +1,39 @@
+@startuml
+start
+
+repeat
+:Initiate Handshake;
+:Complete Handshake;
+repeat while (Connected?)
+
+
+  repeat
+    if (Incoming Data?) then (yes)
+      :Process Incoming Data;
+      :Send ACK;
+    else (no)
+      :Wait for Data;
+    endif
+
+
+if (Data to Send?) then (yes)
+  :Send Data Packet;
+  :Start Timer for ACK;
+else (no)
+  :No Data to Send;
+endif
+
+if (Keep Alive Timer?) then (yes)
+  :Send Keep Alive Message;
+endif
+
+
+
+
+
+repeat while (Disconnection request/Keep Alive Timer?)
+
+  :Close Connection;
+
+stop
+@enduml
