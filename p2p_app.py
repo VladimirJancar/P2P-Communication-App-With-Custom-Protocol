@@ -11,45 +11,12 @@ MAX_FRAGMENT_SIZE = 600 #TODO cant go above
 #TODO upravit protokol podla bodov v hodnoteni
 #TODO Pozor na veľkosť poľa "sequence number" / "poradové číslo fragmentu". V požiadavkách máte, že musíte vedieť preniesť 2MB súbor. Keď nastavím veľmi malú veľkosť fragmentu, tak môžete mať povedzme aj 100 000 fragmentov. A také číslo sa vam do 2-bajtového poľa nezmestí. Rátajte s najmenšou veľkosťou fragmentu 1 bajt, pri testovaní zadania môžeme použiť aj túto hodnotu a musí sa vám súbor korektne poslať
 #TODO zistit ako sa robi ethernetove spojenie
+
 #TODO close connection
 #TODO keep-alive
 #TODO pri /disconnect sa zrusi spojenie
 #TODO arq
 #TODO add packet corruption
-
-# global ACTIVE = True
-# global SEQENCE_NUMBER = 1
-RUNNING = True
-
-def initiateOrAnswerHandshake(peer_socket, dest_ip, dest_port):
-    # Initial SYN Packet
-    while not ACTIVE:
-        syn_packet = Packet(ack_num=0, seq_num=SEQENCE_NUMBER, total_fragments=1, ack=0, syn=1, fin=0, err=0, sfs=0, lfg=0, ftr=0, data="")
-        peer_socket.sendto(syn_packet, (dest_ip, dest_port))
-        print("Sent SYN, waiting for SYN-ACK or incoming SYN...")
-
-        try:
-            peer_socket.settimeout(5)
-            packet, addr = peer_socket.recvfrom(1024)
-            decoded_packet = Packet(packet)
-
-            # Check if incoming is SYN-ACK for the initiated SYN
-            if decoded_packet['syn'] == 1 and decoded_packet['ack'] == 1:
-                print("Received SYN-ACK, sending final ACK.")
-                ack_packet = Packet(ack_num=decoded_packet['seq_num']+1, seq_num=SEQENCE_NUMBER, total_fragments=1, ack=1, syn=0, fin=0, err=0,sfs=0, lfg=0, ftr=0, data="")
-                peer_socket.sendto(ack_packet, (dest_ip, dest_port))
-                ACTIVE = True
-                print("Handshake complete, connection established.")
-                
-            # Handle incoming SYN packet if both peers initiate
-            elif decoded_packet['syn'] == 1 and decoded_packet['ack'] == 0:
-                print("Received SYN, responding with SYN-ACK.")
-                syn_ack_packet = Packet(ack_num=decoded_packet['seq_num']+1, seq_num=SEQENCE_NUMBER, total_fragments=1, ack=1, syn=1, fin=0, err=0,sfs=0, lfg=0, ftr=0, data="")
-                peer_socket.sendto(syn_ack_packet, addr)
-
-        except ConnectionResetError:
-            continue
-
 
 class Peer:
     def __init__(self, ip, port, dest_ip, dest_port, protocol):
@@ -66,29 +33,66 @@ class Peer:
         self.file_transfer = FileTransfer(protocol)
         self.file_receiver = FileReceiver()
 
+        # Keep-alive and reconnection logic
+        self.keep_alive_interval = 5
+        self.ping_timeout = 3
+        self.last_ping_time = 0
+        self.reconnect_attempts = 0
+
     def start(self):
         threading.Thread(target=self.receiveMessages).start()
         threading.Thread(target=self.sendMessages).start()
+        threading.Thread(target=self.keepAlive).start()
         self.initiateHandshake()
 
+    def keepAlive(self):
+        while not self.active:
+            continue
+        while self.active:
+            # Check for heartbeat timeout
+            if time.time() - self.last_heartbeat_time >= self.heartbeat_interval:
+                self.sendHeartbeat()
+
+            # If we've missed 3 consecutive heartbeats, consider the connection lost
+            if self.heartbeat_retries >= self.max_heartbeat_retries:
+                print("Connection lost. Attempting to reconnect...")
+                self.handleConnectionLost()
+                break
+
+            time.sleep(1)  # Check every second
+
+    def sendHeartbeat(self):
+        print("Sending heartbeat packet...")
+        packet = Packet(ack=1, seq_num=0)  # Heartbeat packet with ACK=1 and seq_num=0
+        self.sendPacket(self.dest_ip, self.dest_port, packet)
+        self.last_heartbeat_time = time.time()  # Timestamp of the heartbeat sent
+        self.heartbeat_retries += 1  # Increment retry count
+
+    def handleConnectionLost(self):
+        #TODO
+        # Handle reconnection or cleanup here
+        print("Connection lost, attempting to reconnect...")
+
+        # Retry to reconnect and restore the transfer if interrupted
+        self.active = False
+        self.socket.close()
+        self.__init__(self.ip, self.port, self.dest_ip, self.dest_port, self.protocol)
+        self.start()
+
+        # If the transfer was interrupted, resume the transfer here
+        if self.file_transfer.in_progress:
+            self.file_transfer.resumeTransfer(self)
+
     def initiateHandshake(self):
-        """
-        Attempt to initiate the handshake process.
-        It will keep trying until the handshake is successful.
-        """
         print("Attempting handshake...")
         while not self.handshake_complete:
             try:
-                
                 self.handshake()
                 time.sleep(1)  # Small delay between handshake attempts
             except ConnectionResetError:
                 continue
 
     def handshake(self):
-        """
-        Performs the handshake to establish the connection.
-        """
         if not self.active:
             # Initiating the handshake (SYN)
             syn_packet = Packet(ack_num=0, seq_num=0, syn=1, ack=0, fin=0)
@@ -120,9 +124,7 @@ class Peer:
                 pass
         else:
             # Once connection is established, disable the timeout
-            self.socket.settimeout(None)  # Disable the timeout once handshake is complete
-
-            
+            self.socket.settimeout(None)  # Disable the timeout once handshake is complete  
 
     def sendPacket(self, dest_ip, dest_port, packet):
         self.socket.sendto(packet.toBytes(), (dest_ip, dest_port))
@@ -136,8 +138,7 @@ class Peer:
                 packet = Packet.fromBytes(data)
                 self.handlePacket(packet, addr)
             except socket.timeout:
-                continue
-                time.sleep(1)  # Sleep before retrying to avoid busy-waiting
+                time.sleep(1) 
             except Exception as e:
                 print(f"Error: {e}")
                 time.sleep(1)
@@ -369,13 +370,15 @@ class FileReceiver:
 #! type "/disconnect" on both nodes to terminate connection
 
 if __name__ == '__main__':
-    src_ip = "127.0.0.1"
-    dest_ip = "127.0.0.1"#!
-    #dest_ip = input("Destination IP: ")
-    dest_port = int(input("Destination Port: "))
-    src_port = int(input("Listening Port: "))
-    
-    protocol = Protocol(frag_size=MAX_FRAGMENT_SIZE)
-    peer = Peer(src_ip, src_port, dest_ip, dest_port, protocol)
+    # running = True
+    # while running:
+        src_ip = "127.0.0.1"
+        dest_ip = "127.0.0.1"#!
+        #dest_ip = input("Destination IP: ")
+        dest_port = int(input("Destination Port: "))
+        src_port = int(input("Listening Port: "))
+        
+        protocol = Protocol(frag_size=MAX_FRAGMENT_SIZE)
+        peer = Peer(src_ip, src_port, dest_ip, dest_port, protocol)
 
-    peer.start()
+        peer.start()
