@@ -6,13 +6,13 @@
         <mxCell id="1" parent="0" />
         <mxCell id="zahdTEiP8VYxDNwi-RmT-1" value="" style="endArrow=none;html=1;rounded=0;" edge="1" parent="1">
           <mxGeometry width="50" height="50" relative="1" as="geometry">
-            <mxPoint x="260" y="340" as="sourcePoint" />
+            <mxPoint x="260" y="301" as="sourcePoint" />
             <mxPoint x="260" y="90" as="targetPoint" />
           </mxGeometry>
         </mxCell>
         <mxCell id="zahdTEiP8VYxDNwi-RmT-2" value="" style="endArrow=none;html=1;rounded=0;" edge="1" parent="1" target="zahdTEiP8VYxDNwi-RmT-3">
           <mxGeometry width="50" height="50" relative="1" as="geometry">
-            <mxPoint x="480" y="340" as="sourcePoint" />
+            <mxPoint x="480" y="301" as="sourcePoint" />
             <mxPoint x="480" y="90" as="targetPoint" />
           </mxGeometry>
         </mxCell>
@@ -22,28 +22,22 @@
         <mxCell id="zahdTEiP8VYxDNwi-RmT-4" value="Node A" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
           <mxGeometry x="230" y="60" width="60" height="30" as="geometry" />
         </mxCell>
-        <mxCell id="zahdTEiP8VYxDNwi-RmT-7" value="FIN=1, Seq=X" style="endArrow=classic;html=1;rounded=0;" edge="1" parent="1">
+        <mxCell id="zahdTEiP8VYxDNwi-RmT-7" value="SYN, Seq=X" style="endArrow=classic;html=1;rounded=0;" edge="1" parent="1">
           <mxGeometry width="50" height="50" relative="1" as="geometry">
             <mxPoint x="270" y="120" as="sourcePoint" />
             <mxPoint x="470" y="160" as="targetPoint" />
           </mxGeometry>
         </mxCell>
-        <mxCell id="zahdTEiP8VYxDNwi-RmT-8" value="ACK=1, Seq=X" style="endArrow=classic;html=1;rounded=0;" edge="1" parent="1">
+        <mxCell id="zahdTEiP8VYxDNwi-RmT-8" value="SYN-ACK, Seq=Y, Ack=X+1" style="endArrow=classic;html=1;rounded=0;" edge="1" parent="1">
           <mxGeometry width="50" height="50" relative="1" as="geometry">
             <mxPoint x="470" y="190" as="sourcePoint" />
             <mxPoint x="270" y="210" as="targetPoint" />
           </mxGeometry>
         </mxCell>
-        <mxCell id="zahdTEiP8VYxDNwi-RmT-9" value="FIN=1, Seq=X+1" style="endArrow=classic;html=1;rounded=0;" edge="1" parent="1">
+        <mxCell id="zahdTEiP8VYxDNwi-RmT-10" value="ACK, Ack=Y+1" style="endArrow=classic;html=1;rounded=0;" edge="1" parent="1">
           <mxGeometry width="50" height="50" relative="1" as="geometry">
-            <mxPoint x="470" y="220" as="sourcePoint" />
-            <mxPoint x="270" y="240" as="targetPoint" />
-          </mxGeometry>
-        </mxCell>
-        <mxCell id="zahdTEiP8VYxDNwi-RmT-10" value="ACK=1, Seq=X+1" style="endArrow=classic;html=1;rounded=0;" edge="1" parent="1">
-          <mxGeometry width="50" height="50" relative="1" as="geometry">
-            <mxPoint x="270" y="270" as="sourcePoint" />
-            <mxPoint x="470" y="310" as="targetPoint" />
+            <mxPoint x="269" y="229" as="sourcePoint" />
+            <mxPoint x="469" y="269" as="targetPoint" />
           </mxGeometry>
         </mxCell>
       </root>
