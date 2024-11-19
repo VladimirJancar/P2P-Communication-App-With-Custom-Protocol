@@ -13,7 +13,6 @@ MAX_FRAGMENT_SIZE = 600 #TODO cant go above
 #TODO zistit ako sa robi ethernetove spojenie
 
 #TODO close connection
-#TODO keep-alive
 #TODO pri /disconnect sa zrusi spojenie
 #TODO arq
 #TODO add packet corruption
@@ -25,9 +24,9 @@ class Peer:
         self.dest_ip = dest_ip
         self.dest_port = dest_port
         self.protocol = protocol
-
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.socket.bind((self.ip, self.port))
+        
         self.active = False
         self.handshake_complete = False 
         self.file_transfer = FileTransfer(protocol)
@@ -54,30 +53,24 @@ class Peer:
         while not self.active:
             continue
         while self.active:
-            # Reset the acknowledgment flag
             last_heartbeat_ack = False
 
-            # Send a heartbeat packet
             heartbeat_packet = Packet(ack=1, seq_num=0)
             self.sendPacket(self.dest_ip, self.dest_port, heartbeat_packet)
             # print("Heartbeat sent.")#!DEBUG
 
-            # Wait 5 seconds for an acknowledgment
-            time.sleep(5)
+            time.sleep(self.ping_timeout)
 
-            # Check if acknowledgment was received
             if not last_heartbeat_ack:
                 missed_heartbeats += 1
                 print(f"Missed {missed_heartbeats} heartbeat(s).")
             else:
-                missed_heartbeats = 0  # Reset on successful acknowledgment
+                missed_heartbeats = 0
 
-            # Terminate connection after 3 missed heartbeats
             if missed_heartbeats >= 3:
-                print("Connection lost.")
-                self.active = False
-                #TODO handle disconnection
                 break
+            
+        self.handleConnectionLost()
 
     def sendHeartbeat(self):
         #print("Sending heartbeat packet...")#!DEBUG
@@ -87,19 +80,17 @@ class Peer:
         self.heartbeat_retries += 1  # Increment retry count
 
     def handleConnectionLost(self):
-        #TODO
-        # Handle reconnection or cleanup here
-        print("Connection lost, attempting to reconnect...")
-
-        # Retry to reconnect and restore the transfer if interrupted
+        #TODO add handle disconnection to documentation: tries to reconnect again with handshake, keeps file transfer info 
+        print("Connection lost.")
         self.active = False
+        self.handshake_complete = False 
         self.socket.close()
         self.__init__(self.ip, self.port, self.dest_ip, self.dest_port, self.protocol)
         self.start()
 
         # If the transfer was interrupted, resume the transfer here
-        if self.file_transfer.in_progress:
-            self.file_transfer.resumeTransfer(self)
+        # if self.file_transfer.in_progress:
+        #     self.file_transfer.resumeTransfer(self) #TODO
 
     def initiateHandshake(self):
         print("Attempting handshake...")
@@ -230,11 +221,7 @@ class Peer:
                 
             #else:
                 #TODO handle out of order packet
-                #print(f"Out-of-order packet received: {packet.seq_num}, expected {self.file_receiver.next_expected_seq}")
-
-        
-        
-        
+                #print(f"Out-of-order packet received: {packet.seq_num}, expected {self.file_receiver.next_expected_seq}")     
 
 
 class Protocol:
@@ -429,8 +416,6 @@ class FileReceiver:
                 f.write(self.file_fragments[seq_num].encode('latin1'))
         print(f"File successfully received and saved as \"{save_path}\".")
 
-
-#! type "/disconnect" on both nodes to terminate connection
 
 if __name__ == '__main__':
     # running = True
