@@ -8,9 +8,11 @@ import time
 
 MAX_SEQUENCE_NUMBER = 65535
 MAX_FRAGMENT_SIZE = 600 #TODO cant go above
-#TODO upravit protokol podla bodov v hodnoteni
 #TODO Pozor na veľkosť poľa "sequence number" / "poradové číslo fragmentu". V požiadavkách máte, že musíte vedieť preniesť 2MB súbor. Keď nastavím veľmi malú veľkosť fragmentu, tak môžete mať povedzme aj 100 000 fragmentov. A také číslo sa vam do 2-bajtového poľa nezmestí. Rátajte s najmenšou veľkosťou fragmentu 1 bajt, pri testovaní zadania môžeme použiť aj túto hodnotu a musí sa vám súbor korektne poslať
+
 #TODO zistit ako sa robi ethernetove spojenie
+#TODO finish protocol
+#TODO upravit protokol podla bodov v hodnoteni
 
 #TODO close connection
 #TODO pri /disconnect sa zrusi spojenie
@@ -32,7 +34,7 @@ class Peer:
         self.file_transfer = FileTransfer(protocol)
         self.file_receiver = FileReceiver()
 
-        # Keep-alive and reconnection logic
+        # Keep-alive and reconnection
         self.keep_alive_interval = 5
         self.ping_timeout = 3
         self.last_ping_time = 0
@@ -42,9 +44,44 @@ class Peer:
 
     def start(self):
         threading.Thread(target=self.receiveMessages).start()
-        threading.Thread(target=self.sendMessages).start()
+        threading.Thread(target=self.handleInput).start()
         threading.Thread(target=self.keepAlive).start()
         self.initiateHandshake()
+
+    def initiateHandshake(self):
+        print("Attempting handshake...")
+        while not self.handshake_complete:
+            try:
+                self.handshake()    
+            except ConnectionResetError:
+                continue
+
+    def handshake(self):
+        #TODO include handshake initialization to documentation if needed
+        if not self.active:
+            syn_packet = Packet(ack_num=0, seq_num=0, syn=1, ack=0, fin=0)
+            self.socket.sendto(syn_packet.toBytes(), (self.dest_ip, self.dest_port))
+            print("Sent SYN packet.")
+            try:
+                self.socket.settimeout(5)
+                data, addr = self.socket.recvfrom(1024)
+                packet = Packet.fromBytes(data)
+
+                if packet.syn == 1 and packet.ack == 1:
+                    print("Received SYN-ACK, sending final ACK.")
+                    ack_packet = Packet(ack_num=packet.seq_num + 1, seq_num=0, ack=1, syn=0, fin=0)
+                    self.socket.sendto(ack_packet.toBytes(), (self.dest_ip, self.dest_port))
+                    self.handshake_complete = True
+                    self.active = True
+                    print("Handshake complete, connection established.")
+                elif packet.syn == 1:
+                    print("Received SYN, sending SYN-ACK.")
+                    syn_ack_packet = Packet(ack_num=0, seq_num=0, syn=1, ack=1, fin=0)
+                    self.socket.sendto(syn_ack_packet.toBytes(), addr)     
+            except socket.timeout:
+                pass
+        else:
+            self.socket.settimeout(None)
 
     def keepAlive(self):
         global last_heartbeat_ack
@@ -57,7 +94,7 @@ class Peer:
 
             heartbeat_packet = Packet(ack=1, seq_num=0)
             self.sendPacket(self.dest_ip, self.dest_port, heartbeat_packet)
-            # print("Heartbeat sent.")#!DEBUG
+            # print("Heartbeat sent.")
 
             time.sleep(self.ping_timeout)
 
@@ -91,48 +128,6 @@ class Peer:
         # If the transfer was interrupted, resume the transfer here
         # if self.file_transfer.in_progress:
         #     self.file_transfer.resumeTransfer(self) #TODO
-
-    def initiateHandshake(self):
-        print("Attempting handshake...")
-        while not self.handshake_complete:
-            try:
-                self.handshake()
-                #time.sleep(1)  # Small delay between handshake attempts
-            except ConnectionResetError:
-                continue
-
-    def handshake(self):
-        if not self.active:
-            # Initiating the handshake (SYN)
-            syn_packet = Packet(ack_num=0, seq_num=0, syn=1, ack=0, fin=0)
-            self.socket.sendto(syn_packet.toBytes(), (self.dest_ip, self.dest_port))
-            #print("Sent SYN packet.")
-
-            try:
-                self.socket.settimeout(5)  # Set timeout only during handshake
-                data, addr = self.socket.recvfrom(1024)
-                packet = Packet.fromBytes(data)
-
-                if packet.syn == 1 and packet.ack == 1:
-                    print("Received SYN-ACK, sending final ACK.")
-                    ack_packet = Packet(ack_num=packet.seq_num + 1, seq_num=0, ack=1, syn=0, fin=0)
-                    self.socket.sendto(ack_packet.toBytes(), (self.dest_ip, self.dest_port))
-                    self.handshake_complete = True
-                    self.active = True
-                    print("Handshake complete, connection established.")
-
-                elif packet.syn == 1:
-                    # Peer initiated the handshake, respond with SYN-ACK
-                    print("Received SYN, sending SYN-ACK.")
-                    syn_ack_packet = Packet(ack_num=0, seq_num=0, syn=1, ack=1, fin=0)
-                    self.socket.sendto(syn_ack_packet.toBytes(), addr)
-                    
-
-            except socket.timeout:
-                pass
-        else:
-            # Once connection is established, disable the timeout
-            self.socket.settimeout(None)  # Disable the timeout once handshake is complete  
             
     def sendPacket(self, dest_ip, dest_port, packet):
         packet.ack_num = self.file_receiver.next_expected_seq
@@ -149,52 +144,10 @@ class Peer:
             except socket.timeout:
                 time.sleep(1) 
             except Exception as e:
-                #print(f"Error: {e}") #!DEBUG
+                #print(f"Error: {e}")
                 time.sleep(1)
 
-    def sendMessages(self):
-        #TODO break the function
-        while not self.active:
-            continue
-        while self.active:
-            message = input("\n")
-
-            # Handle fragment size change
-            if message.startswith("/setfragsize "):
-                try:
-                    new_size = int(message.split()[1])
-                    if self.protocol.setFragmentSize(new_size):
-                        print(f"Fragment size set to {new_size} bytes.")
-                        #TODO add sfs packet receiving
-                        ack_packet = Packet(ack=1, sfs=1, data=f"Fragment size set to {new_size}")
-                        self.sendPacket(self.dest_ip, self.dest_port, ack_packet)
-                    else:
-                        print(f"Invalid fragment size. Must be between 1 and {MAX_FRAGMENT_SIZE} bytes.")
-                except ValueError:
-                    print("Invalid command. Usage: /setfragsize <size>")
-
-            # /send #TODO add to documentation
-            if message.startswith("/send "):
-                file_path = message[6:].strip()
-                try:
-                    if not os.path.exists(file_path):
-                        print("Error: File does not exist.")
-                        continue
-
-                    print(f"Sending file: {file_path}")
-                    self.file_transfer.sendFile(self, self.dest_ip, self.dest_port, file_path)
-                except Exception as e:
-                    print(f"Error sending file: {e}")
-            else:
-                # Regular text message
-                packet = Packet(seq_num=self.message_seq_num, data=message)
-                self.socket.sendto(packet.toBytes(), (self.dest_ip, self.dest_port))
-                self.message_seq_num += 1
-
-                if message == "/disconnect": #TODO 
-                    self.active = False
-
-    def handlePacket(self, packet, addr):
+    def handlePacket(self, packet, addr): #TODO
         global last_heartbeat_ack
         
         # if packet.ack == 1:  #TODO ARQ
@@ -223,6 +176,53 @@ class Peer:
                 #TODO handle out of order packet
                 #print(f"Out-of-order packet received: {packet.seq_num}, expected {self.file_receiver.next_expected_seq}")     
 
+    def handleInput(self):
+        while not self.active: continue
+        while self.active:
+            user_input = input("\n")
+
+            if user_input.startswith("/setfragsize "):
+                try:
+                    new_size = int(user_input.split()[1])
+                    self.setFragmentSize(new_size)
+                except ValueError:
+                    print("Invalid command. Usage: /setfragsize <size>")
+            #TODO add to documentation
+            elif user_input.startswith("/send "):
+                file_path = user_input[6:].strip()
+                self.sendFile(file_path)
+            elif user_input.startswith("/disconnect"):
+                self.disconnect()
+            else:
+                self.sendTextMessage(user_input)
+
+    def sendFile(self, file_path):
+        try:
+            if os.path.exists(file_path):
+                print(f"Sending file: {file_path}")
+                self.file_transfer.sendFile(self, self.dest_ip, self.dest_port, file_path)
+            else:
+                print("Error: File does not exist.")
+        except Exception as e:
+            print(f"Error sending file: {e}")   
+
+    def sendTextMessage(self, message):
+        packet = Packet(seq_num=self.message_seq_num, data=message)
+        self.socket.sendto(packet.toBytes(), (self.dest_ip, self.dest_port))
+        self.message_seq_num += 1
+
+    def setFragmentSize(self, new_size):
+        if self.protocol.setFragmentSize(new_size):
+            print(f"Fragment size set to {new_size} bytes.")
+            #TODO add sfs packet receiving to documentation
+            ack_packet = Packet(ack=1, sfs=1, data=f"Fragment size set to {new_size}")
+            self.sendPacket(self.dest_ip, self.dest_port, ack_packet)
+        else:
+            print(f"Invalid fragment size. Must be between 1 and {MAX_FRAGMENT_SIZE} bytes.")
+
+    def disconnect(self): #TODO
+        self.active = False
+ 
 
 class Protocol:
     def __init__(self, frag_size=MAX_FRAGMENT_SIZE):
@@ -418,15 +418,13 @@ class FileReceiver:
 
 
 if __name__ == '__main__':
-    # running = True
-    # while running:
-        src_ip = "127.0.0.1"
-        dest_ip = "127.0.0.1"#!
-        #dest_ip = input("Destination IP: ")
-        dest_port = int(input("Destination Port: "))
-        src_port = int(input("Listening Port: "))
+    src_ip = "127.0.0.1"
+    dest_ip = "127.0.0.1"#!
+    #dest_ip = input("Destination IP: ")
+    dest_port = int(input("Destination Port: "))
+    src_port = int(input("Listening Port: "))
         
-        protocol = Protocol(frag_size=MAX_FRAGMENT_SIZE)
-        peer = Peer(src_ip, src_port, dest_ip, dest_port, protocol)
+    protocol = Protocol(frag_size=MAX_FRAGMENT_SIZE)
+    peer = Peer(src_ip, src_port, dest_ip, dest_port, protocol)
 
-        peer.start()
+    peer.start()
