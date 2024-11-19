@@ -39,6 +39,8 @@ class Peer:
         self.last_ping_time = 0
         self.reconnect_attempts = 0
 
+        self.message_seq_num = 1 #TODO wrapping/resetting
+
     def start(self):
         threading.Thread(target=self.receiveMessages).start()
         threading.Thread(target=self.sendMessages).start()
@@ -46,23 +48,39 @@ class Peer:
         self.initiateHandshake()
 
     def keepAlive(self):
+        global last_heartbeat_ack
+        missed_heartbeats = 0
+
         while not self.active:
             continue
         while self.active:
-            # Check for heartbeat timeout
-            if time.time() - self.last_heartbeat_time >= self.heartbeat_interval:
-                self.sendHeartbeat()
+            # Reset the acknowledgment flag
+            last_heartbeat_ack = False
 
-            # If we've missed 3 consecutive heartbeats, consider the connection lost
-            if self.heartbeat_retries >= self.max_heartbeat_retries:
-                print("Connection lost. Attempting to reconnect...")
-                self.handleConnectionLost()
+            # Send a heartbeat packet
+            heartbeat_packet = Packet(ack=1, seq_num=0)
+            self.sendPacket(self.dest_ip, self.dest_port, heartbeat_packet)
+            # print("Heartbeat sent.")#!DEBUG
+
+            # Wait 5 seconds for an acknowledgment
+            time.sleep(5)
+
+            # Check if acknowledgment was received
+            if not last_heartbeat_ack:
+                missed_heartbeats += 1
+                print(f"Missed {missed_heartbeats} heartbeat(s).")
+            else:
+                missed_heartbeats = 0  # Reset on successful acknowledgment
+
+            # Terminate connection after 3 missed heartbeats
+            if missed_heartbeats >= 3:
+                print("Connection lost.")
+                self.active = False
+                #TODO handle disconnection
                 break
 
-            time.sleep(1)  # Check every second
-
     def sendHeartbeat(self):
-        print("Sending heartbeat packet...")
+        #print("Sending heartbeat packet...")#!DEBUG
         packet = Packet(ack=1, seq_num=0)  # Heartbeat packet with ACK=1 and seq_num=0
         self.sendPacket(self.dest_ip, self.dest_port, packet)
         self.last_heartbeat_time = time.time()  # Timestamp of the heartbeat sent
@@ -88,7 +106,7 @@ class Peer:
         while not self.handshake_complete:
             try:
                 self.handshake()
-                time.sleep(1)  # Small delay between handshake attempts
+                #time.sleep(1)  # Small delay between handshake attempts
             except ConnectionResetError:
                 continue
 
@@ -117,16 +135,16 @@ class Peer:
                     print("Received SYN, sending SYN-ACK.")
                     syn_ack_packet = Packet(ack_num=0, seq_num=0, syn=1, ack=1, fin=0)
                     self.socket.sendto(syn_ack_packet.toBytes(), addr)
-                    self.handshake_complete = True  # Mark handshake as complete when we respond
-                    self.active = True
+                    
 
             except socket.timeout:
                 pass
         else:
             # Once connection is established, disable the timeout
             self.socket.settimeout(None)  # Disable the timeout once handshake is complete  
-
+            
     def sendPacket(self, dest_ip, dest_port, packet):
+        packet.ack_num = self.file_receiver.next_expected_seq
         self.socket.sendto(packet.toBytes(), (dest_ip, dest_port))
 
     def receiveMessages(self):
@@ -140,7 +158,7 @@ class Peer:
             except socket.timeout:
                 time.sleep(1) 
             except Exception as e:
-                print(f"Error: {e}")
+                #print(f"Error: {e}") #!DEBUG
                 time.sleep(1)
 
     def sendMessages(self):
@@ -178,18 +196,45 @@ class Peer:
                     print(f"Error sending file: {e}")
             else:
                 # Regular text message
-                packet = Packet(ack=1, data=message)
+                packet = Packet(seq_num=self.message_seq_num, data=message)
                 self.socket.sendto(packet.toBytes(), (self.dest_ip, self.dest_port))
+                self.message_seq_num += 1
 
-                if message == "/disconnect":
+                if message == "/disconnect": #TODO 
                     self.active = False
 
     def handlePacket(self, packet, addr):
-        if packet.ftr == 1:  # File transfer packet
-            #print(f"Receiving file fragment {packet.seq_num}")
-            self.file_receiver.receiveFragment(packet)
-        else:
-            print(f"\n{addr[0]}:{addr[1]} >> {packet.data}")
+        global last_heartbeat_ack
+        
+        # if packet.ack == 1:  #TODO ARQ
+        #     pass
+        
+        if packet.seq_num == 0 and packet.ack == 1 and packet.syn == 0:  # Heartbeat packet
+            # print("Heartbeat received") #!DEBUG
+            last_heartbeat_ack = True
+            # ack_packet = Packet(ack=1, seq_num=0)  # Acknowledge heartbeat
+            # self.sendPacket(addr[0], addr[1], ack_packet)
+
+        elif packet.seq_num > 0:  # Data packet
+            #if packet.seq_num == self.file_receiver.next_expected_seq: #TODO
+                if packet.ftr == 1:  # File transfer packet
+                    self.file_receiver.receiveFragment(packet)
+                    self.file_receiver.next_expected_seq += 1
+
+                    if self.file_receiver.file_complete:
+                        self.file_receiver = FileReceiver()
+                    
+                else:
+                    print(f"\n{addr[0]}:{addr[1]} >> {packet.data}")
+
+                
+            #else:
+                #TODO handle out of order packet
+                #print(f"Out-of-order packet received: {packet.seq_num}, expected {self.file_receiver.next_expected_seq}")
+
+        
+        
+        
 
 
 class Protocol:
@@ -277,10 +322,13 @@ class Packet:
 
 
 class FileTransfer:
+    #TODO DOCUMENTATION: ack_num should reset with every file; the files have their own ack_num and messages too
     def __init__(self, protocol):
         self.protocol = protocol
 
     def sendFile(self, peer, dest_ip, dest_port, file_path):
+        self.file_seq_num = 1
+
         try:
             filename = os.path.basename(file_path)
             with open(file_path, 'rb') as file:
@@ -307,9 +355,23 @@ class FileTransfer:
                     )
                     peer.sendPacket(dest_ip, dest_port, packet)
 
+                    # Wait for acknowledgment
+                    #TODO! ARQ
+                    try:
+                        peer.socket.settimeout(5)
+                        ack_data, _ = peer.socket.recvfrom(1024)
+                        ack_packet = Packet.fromBytes(ack_data)
+                        if ack_packet.ack == 1 and ack_packet.ack_num == packet.seq_num + 1:
+                            print(f"Acknowledgment received for packet {packet.seq_num}")
+                            break
+                    except socket.timeout:
+                        print(f"Timeout waiting for acknowledgment of packet {packet.seq_num}, retransmitting...")
+
                     # Show progress
                     print(f"\rSent {i + 1}/{total_fragments} packets", end="", flush=True)
-                
+
+                    self.file_seq_num += 1#TODO fully implement
+
                 print("\nFile sent successfully.")
                 
         except FileNotFoundError:
@@ -324,6 +386,7 @@ class FileReceiver:
         self.expected_fragments = None  # Total fragments to expect
         self.file_complete = False
         self.current_filename = None  # Track the file being received
+        self.next_expected_seq = 1
 
     def receiveFragment(self, packet):
         if packet.ftr != 1: # Non file fragment => ignore
