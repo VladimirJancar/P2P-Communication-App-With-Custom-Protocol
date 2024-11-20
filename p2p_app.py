@@ -65,7 +65,7 @@ class Peer:
         if not self.active:
             syn_packet = Packet(ack_num=0, seq_num=1, syn=1, ack=0, fin=0)
             self.socket.sendto(syn_packet.toBytes(), (self.dest_ip, self.dest_port))
-            print("Sent SYN packet.")
+            #print("Sent SYN packet.")
             try:
                 self.socket.settimeout(5)
                 data, addr = self.socket.recvfrom(1024)
@@ -157,21 +157,18 @@ class Peer:
         
         if packet.fin == 1:
             print("FIN received from peer.")
-            if not self.fin_sent:
-                ack_packet = Packet(ack=1, seq_num=packet.seq_num)
-                self.sendPacket(self.dest_ip, self.dest_port, ack_packet)
-                self.terminateConnection()  # Send my own FIN
-            else:
-                ack_packet = Packet(ack=1, seq_num=packet.seq_num)
-                self.sendPacket(self.dest_ip, self.dest_port, ack_packet)
-                print("Connection terminated successfully.")
-                self.active = False
-                self.socket.close()
+            ack_packet = Packet(ack=1, seq_num=packet.seq_num)
+            self.sendPacket(self.dest_ip, self.dest_port, ack_packet)
+            self.active = False
+            self.connection_terminated = True
+            self.socket.close()
+            print("Connection terminated successfully.")
+
            
-        elif packet.ack == 1 and self.fin_sent:
-            # ACK received for my FIN (3rd step of handshake)
+        elif packet.ack == 1 and self.fin_sent: #TODO check ack
             print("ACK received for my FIN.")
             self.active = False
+            self.connection_terminated = True
             self.socket.close()
             print("Connection terminated successfully.")
 
@@ -246,15 +243,15 @@ class Peer:
         else:
             print(f"Invalid fragment size. Must be between 1 and {MAX_FRAGMENT_SIZE} bytes.")
 
-    def trerminateConnection(self): #TODO
+    def trerminateConnection(self): #TODO DOCUMENTATION: update to 2-way disconnect handshake (fin, ack)
         self.message_seq_num = (self.message_seq_num + 1) % (MAX_SEQUENCE_NUMBER + 1)
         if self.message_seq_num == 0: 
             self.message_seq_num = 1
 
         fin_packet = Packet(fin=1, seq_num=self.message_seq_num)
         self.sendPacket(self.dest_ip, self.dest_port, fin_packet)
-        self.fin_sent = True  # Mark that I sent a FIN
-        print("FIN packet sent. Waiting for ACK or FIN from peer...")
+        self.fin_sent = True
+        print("FIN packet sent.")
  
 
 class Protocol:
