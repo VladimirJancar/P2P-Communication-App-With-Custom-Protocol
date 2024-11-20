@@ -7,7 +7,7 @@ import time
 
 
 MAX_SEQUENCE_NUMBER = 65535
-MAX_FRAGMENT_SIZE = 600 #TODO cant go above
+MAX_FRAGMENT_SIZE = 1 #TODO cant go above
 #TODO Pozor na veľkosť poľa "sequence number" / "poradové číslo fragmentu". V požiadavkách máte, že musíte vedieť preniesť 2MB súbor. Keď nastavím veľmi malú veľkosť fragmentu, tak môžete mať povedzme aj 100 000 fragmentov. A také číslo sa vam do 2-bajtového poľa nezmestí. Rátajte s najmenšou veľkosťou fragmentu 1 bajt, pri testovaní zadania môžeme použiť aj túto hodnotu a musí sa vám súbor korektne poslať
 
 #TODO zistit ako sa robi ethernetove spojenie
@@ -15,7 +15,7 @@ MAX_FRAGMENT_SIZE = 600 #TODO cant go above
 #TODO upravit protokol podla bodov v hodnoteni
 
 #TODO arq
-#TODO add packet corruption
+#TODO add packet corruption / checksum
 
 class Peer:
     def __init__(self, ip, port, dest_ip, dest_port, protocol):
@@ -185,7 +185,7 @@ class Peer:
                 else:
                     print(f"\n{addr[0]}:{addr[1]} >> {packet.data}")
 
-                
+        #TODO handle setfragsize
             #else:
                 #TODO handle out of order packet
                 #print(f"Out-of-order packet received: {packet.seq_num}, expected {self.file_receiver.next_expected_seq}")     
@@ -213,6 +213,7 @@ class Peer:
 
     def sendFile(self, file_path):
         #TODO DOCUMENTATION: ftr packets have their own ack_num 
+        self.file_transfer = FileTransfer(protocol)
         try:
             if os.path.exists(file_path):
                 print(f"Sending file: {file_path}")
@@ -223,7 +224,7 @@ class Peer:
             print(f"Error sending file: {e}")   
 
     def sendTextMessage(self, message):
-        self.message_seq_num = (self.message_seq_num + 1) % (MAX_SEQUENCE_NUMBER + 1)
+        self.message_seq_num = (self.message_seq_num + 1)
         if self.message_seq_num == 0: 
             self.message_seq_num = 1
 
@@ -279,28 +280,27 @@ class Packet:
         self.lfg = lfg
         self.ftr = ftr
         self.checksum = checksum
-        self.data_length = data_length
+        self.data_length = data_length #TODO remove data len, dont use it and remove from documentation
         self.data = data
 
     def toBytes(self):
         flags = (self.ack << 7) | (self.syn << 6) | (self.fin << 5) | (self.err << 4) | (self.sfs << 3) | (self.lfg << 2) | (self.ftr << 1)
-        checksum = self.calculateChecksum(self.data.encode('utf-8'))
+        checksum = 1#self.calculateChecksum#!(self.data.encode('utf-8'))
         header = struct.pack(
-            '!HHBHH',
+            '!IIBH', #TODO DOCUMENTATIO 32 bits, 
             self.ack_num,          # 16b
             self.seq_num,          # 16b #TODO update documentation: removed fragment num
             flags,                 # 8b
             checksum,              # 16b
-            len(self.data)         # 16b
         )
         return header + self.data.encode('utf-8')
 
     @staticmethod
     def fromBytes(packet):
         #TODO Update documentation (changes): removed total_fragments field, added LFG (last fragment) flag, added SFS (set fragment size) flag, added FTR (file transfer) flag;
-        header = packet[:9]
-        ack_num, seq_num, flags, checksum, data_length = struct.unpack('!HHBHH', header)
-        data = packet[9:].decode('utf-8')
+        header = packet[:11]
+        ack_num, seq_num, flags, checksum = struct.unpack('!IIBH', header)
+        data = packet[11:].decode('utf-8')
 
         return Packet(
             ack_num=ack_num,
@@ -313,7 +313,6 @@ class Packet:
             lfg=(flags >> 2) & 1,
             ftr=(flags >> 1) & 1,
             checksum=checksum,
-            data_length=data_length,
             data=data
         )
 
@@ -338,11 +337,10 @@ class Packet:
 class FileTransfer:
     #TODO DOCUMENTATION: ack_num should reset with every file; the files have their own ack_num and messages too
     def __init__(self, protocol):
+        self.file_seq_num = 1
         self.protocol = protocol
 
     def sendFile(self, peer, dest_ip, dest_port, file_path):
-        self.file_seq_num = 1
-
         try:
             filename = os.path.basename(file_path)
             with open(file_path, 'rb') as file:
@@ -350,46 +348,33 @@ class FileTransfer:
                 fragments = self.protocol.fragmentData(data.decode('latin1'))
                 total_fragments = len(fragments)
 
-                # Send filename in a separate packet
-                #TODO add to documentation: first packet is total_fragments (8hex digits) + '|' + filename (ftr=1, ack=1)
-                setup_packet = Packet(  # Special sequence number for filename
+                # Send setup packet with total_fragments and filename
+                setup_packet = Packet(
+                    seq_num=self.file_seq_num,
                     ftr=1,
                     ack=1,
                     lfg=0,
                     data=f"{total_fragments:08x}|{filename}"
                 )
                 peer.sendPacket(dest_ip, dest_port, setup_packet)
-                
+
                 for i, fragment in enumerate(fragments):
                     packet = Packet(
-                        seq_num=i + 1,
-                        lfg=(1 if i == len(fragments) - 1 else 0),
+                        seq_num=(i + 1), 
+                        lfg=(1 if i == len(fragments) - 1 else 0),  # Last fragment flag
                         ftr=1,
                         data=fragment
                     )
                     peer.sendPacket(dest_ip, dest_port, packet)
 
-                    # Wait for acknowledgment
-                    #TODO! ARQ
-                    try:
-                        peer.socket.settimeout(5)
-                        ack_data, _ = peer.socket.recvfrom(1024)
-                        ack_packet = Packet.fromBytes(ack_data)
-                        if ack_packet.ack == 1 and ack_packet.ack_num == packet.seq_num + 1:
-                            print(f"Acknowledgment received for packet {packet.seq_num}")
-                            break
-                    except socket.timeout:
-                        print(f"Timeout waiting for acknowledgment of packet {packet.seq_num}, retransmitting...")
-
                     # Show progress
                     print(f"\rSent {i + 1}/{total_fragments} packets", end="", flush=True)
 
-                    self.file_seq_num += 1#TODO fully implement
+                    
 
                 print("\nFile sent successfully.")
-                
         except FileNotFoundError:
-            print("File not found.")
+            print("Error: File not found.")
         except Exception as e:
             print(f"Error sending file: {e}")
 
@@ -402,12 +387,13 @@ class FileReceiver:
         self.current_filename = None  # Track the file being received
         self.next_expected_seq = 1
 
+        self.wrap_count = 0
+
     def receiveFragment(self, packet):
-        if packet.ftr != 1: # Non file fragment => ignore
+        if packet.ftr != 1:  # Ignore non-file transfer packets
             return
 
-        # Handle filename packet
-        if packet.ack == 1: 
+        if packet.ack == 1:  # Handle filename packet
             try:
                 total_fragments_hex, filename = packet.data.split('|', 1)
                 self.expected_fragments = int(total_fragments_hex, 16)
@@ -417,16 +403,21 @@ class FileReceiver:
                 print("Error parsing header packet.")
             return
 
-        else:
-            self.file_fragments[packet.seq_num] = packet.data
+        # Handle fragment packet
+        wrapped_seq_num = packet.seq_num
+        self.file_fragments[wrapped_seq_num] = packet.data
 
-            if self.expected_fragments:
-                # Show progress
-                print(f"\rReceived {len(self.file_fragments)}/{self.expected_fragments} packets", end="", flush=True)
+        #
 
-            if self.expected_fragments and len(self.file_fragments) == self.expected_fragments:
-                self.reconstructFile()
-                self.file_complete = True
+        # Show progress
+        if self.expected_fragments:
+            print(f"\rReceived {len(self.file_fragments)}/{self.expected_fragments} packets", end="", flush=True)
+
+        # Check if file transfer is complete
+        if self.expected_fragments and len(self.file_fragments) == self.expected_fragments:
+            self.reconstructFile()
+            self.file_complete = True
+                
 
 
     def reconstructFile(self):
