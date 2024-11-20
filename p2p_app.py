@@ -14,8 +14,6 @@ MAX_FRAGMENT_SIZE = 600 #TODO cant go above
 #TODO finish protocol
 #TODO upravit protokol podla bodov v hodnoteni
 
-#TODO close connection
-#TODO pri /disconnect sa zrusi spojenie
 #TODO arq
 #TODO add packet corruption
 
@@ -40,9 +38,8 @@ class Peer:
         self.last_ping_time = 0
         self.reconnect_attempts = 0
 
-        self.fin_sent = False
         self.connection_terminated = False
-        self.expected_fin_ack_seq = -1
+        self.expected_fin_ack = -1
 
         self.message_seq_num = 1 #txt and heartbeat packets
 
@@ -156,7 +153,7 @@ class Peer:
         global last_heartbeat_ack
         
         if packet.fin == 1:
-            print("FIN received from peer.")
+            print("FIN received from peer. Sending ACK...")
             ack_packet = Packet(ack=1, seq_num=packet.seq_num)
             self.sendPacket(self.dest_ip, self.dest_port, ack_packet)
             self.active = False
@@ -165,7 +162,7 @@ class Peer:
             print("Connection terminated successfully.")
 
            
-        elif packet.ack == 1 and self.fin_sent: #TODO check ack
+        elif packet.ack == 1 and self.expected_fin_ack == packet.seq_num:
             print("ACK received for my FIN.")
             self.active = False
             self.connection_terminated = True
@@ -248,9 +245,9 @@ class Peer:
         if self.message_seq_num == 0: 
             self.message_seq_num = 1
 
+        self.expected_fin_ack = self.message_seq_num
         fin_packet = Packet(fin=1, seq_num=self.message_seq_num)
         self.sendPacket(self.dest_ip, self.dest_port, fin_packet)
-        self.fin_sent = True
         print("FIN packet sent.")
  
 
