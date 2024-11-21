@@ -106,8 +106,13 @@ Kontrolný súčet je 16-bitová hodnota vypočítaná nasledovne:
     \end{enumerate}
 
     \subsection{Spoľahlivý prenos údajov}\label{prenos}
-    Protokol zabezpečuje spoľahlivý prenos údajov pomocou vlastnej variácie ARQ. Jeden thread odosiela fragmenty a druhý čaká na ACK packety. Vždy keď sa odošle fragment, pridá sa jeho sekvenčné číslo do zoznamu \textbf{unacknowledged packets}. Keď príde potvrdenie o úspešnom prijatí fragmentu (ACK packet s poradovým číslom prijatého fragmentu), sekvenčné číslo sa zo zoznamu nepotvrdených packetov odstráni. Ak ostali nejaké nepotvrdené packety v zozname, odošlú sa znova. Ak ktorákoľvek strana nedostane odpoveď na 3 po sebe idúce heartbeat packety, spojenie sa ukončí a zobrazí sa správa o neúspešnom prenose súboru. V prípade dočasného prerušenia sa prenost údajov obnoví.
-
+    Protokol zabezpečuje spoľahlivý prenos údajov pomocou vlastnej variácie ARQ (Obr. \ref{fig:arq_diagram}). Jeden thread odosiela fragmenty a druhý čaká na ACK packety. Vždy keď sa odošle fragment, pridá sa jeho sekvenčné číslo do zoznamu \textbf{unacknowledged packets}. Keď príde potvrdenie o úspešnom prijatí fragmentu (ACK packet s poradovým číslom prijatého fragmentu), sekvenčné číslo sa zo zoznamu nepotvrdených packetov odstráni. Ak ostali nejaké nepotvrdené packety v zozname, odošlú sa znova. Ak ktorákoľvek strana nedostane odpoveď na 3 po sebe idúce heartbeat packety, spojenie sa ukončí a zobrazí sa správa o neúspešnom prenose súboru. V prípade dočasného prerušenia sa prenost údajov obnoví.
+	\begin{figure}[h]
+		\centering
+		\includegraphics[width=0.70\textwidth]{arq_diagram.png}
+		\caption{Diagram ARQ}
+		\label{fig:arq_diagram}
+	\end{figure}
 
     \subsection{Nadviazanie spojenia}
 	Predtým, než bude možné si vymienať údaje, musia sa oba uzly presvedčiť, že druhá strana je pripravená komunikovať. K tomuto účelu slúži tzv. \textbf{3-Way Handshake} (Obr. \ref{fig:handshake_diagram}), ktorý pozostáva z nasledujúcich krokov:
@@ -140,7 +145,7 @@ Kontrolný súčet je 16-bitová hodnota vypočítaná nasledovne:
    	\end{itemize}
 
 	\subsection{Ukončenie spojenia}
-		V protokole prebieha ukončenie spojenia pomocou 3-way termination) (Obr. \ref{fig:disconnect_diagram}). Proces vyzerá nasledovne:
+		V protokole prebieha ukončenie spojenia pomocou 2-way termination) (Obr. \ref{fig:disconnect_diagram}). Proces vyzerá nasledovne:
 		\begin{enumerate}
 			\item Odosielateľ pošle packet s flagom \textbf{FIN=1} a poradovým číslom (Seq=X).
 			\item Po prijatí FIN packetu druhý uzol odpovie odoslaním packetu s flagom \textbf{ACK=1} a rovnakým poradovým číslom. Následne odošle aj FIN packet s novým poardovým číslom (Seq=X+1).
@@ -181,12 +186,11 @@ Kontrolný súčet je 16-bitová hodnota vypočítaná nasledovne:
      \subsection{Príkazy a používateľský vstup}
 	Program podporuje tri príkazy:
 	\begin{itemize}
-		\item \textbf{/setfragsize <size>} pre nastavenie veľkosti fragmentov. Po zadaní tohoto príkazu sa odošle druhému uzlu packet s vlajkou SFS=1 a požadovanou veľkosťou fragmentov.
-		\item Zahodenie niektorých packetov.
-		\item Duplikovanie niektorých packetov. 
+		\item \textbf{/setfragsize $<size>$} pre nastavenie veľkosti fragmentov. Po zadaní tohoto príkazu sa odošle druhému uzlu packet s vlajkou SFS=1 a požadovanou veľkosťou fragmentov.
+		\item \textbf{/disconnect} pre manuálne ukončenie spojenia (inicializáciu 2-way termination), teda odoslanie FIN packetu.
+		\item \textbf{/send $<file>$} pre odoslanie súboru. Pri prijímaní súboru je používateľovi daná možnost uložiť ho v akomkoľvek priečinku (zadaním cesty k nemu). Ak zadaná cesta nie je valídna alebo bol vstup prázdny, súbor sa uloží do priečinka predvoleného systémom.
 	\end{itemize}
   
-\textbf{/disconnect} pre manuálne ukončenie spojenia (inicializáciu 3-way termination) a na záver \textbf{/send <file>}. Pre prijímaní súboru je používateľovi daná možnost uložiť ho v akomkoľvek priečinku (zadaním cesty k nemu). Ak zadaná cesta nie je valídna alebo bol vstup prázdny, súbor sa uloží do priečinka predvoleného systémom.
 
     \subsection{Vytváranie a riešenie chýb}
     Protokol zahŕňa mechanizmy na detekciu a požiadanie o opätovné odoslanie stratených alebo poškodených packetov. Pre ich otestovanie sa v implementácii nachádzajú spôsoby, ako zámerne vytvárať chyby:
@@ -200,12 +204,12 @@ Kontrolný súčet je 16-bitová hodnota vypočítaná nasledovne:
 
 
 \section{Záver}
-	Úspešne sme navrhli a implementovali vlastný protokol na jednoduchý, no spoľahlivý prenos údajov spôsobom \textit{Stop-and-Wait ARQ}. Protokol umožňuje fragmentáciu správ, kontrolu integrity pomocou CRC-16 a zabezpečuje spoľahlivé spojenie vďaka Keep-Alive systému a nadviazaním spojenia cez 3-way handshake. Prenášané packety sú viditeľné prostredníctvom programu Wireshark a sú v nej rozoznateľné polia nášho vlastného protokolu.
+	Úspešne sme navrhli a implementovali vlastný protokol na jednoduchý, no spoľahlivý prenos údajov spôsobom \textit{Stop-and-Wait ARQ}. Protokol umožňuje fragmentáciu správ, kontrolu integrity pomocou CRC-16 a zabezpečuje spoľahlivé spojenie vďaka Keep-Alive systému a nadviazaním spojenia cez 2-way handshake. Prenášané packety sú viditeľné prostredníctvom programu Wireshark a sú v nej rozoznateľné polia nášho vlastného protokolu.
 
 \section{Zmeny oproti pôvodnému návrhu}
 	\begin{itemize}
-	    \item Zmena spôsobu ukončenia spojenia. Namiesto 4-way termination sa používa 3-way termination.
-	    \item Zjednodušenie ARQ systému. Prechod zo S\&W na vlastnú variáciu.
+	    \item Zmena spôsobu ukončenia spojenia. Namiesto 4-way termination sa používa 2-way termination.
+	    \item Zjednodušenie ARQ systému a pridanie diagramu. Prechod zo S\&W na vlastnú variáciu.
 	    \item Pridanie príkazov /setfragsize, /send.
 	    \item Prijímanie správ a prijímanie súborov sa deje v rozdielnych threadoch.
 	    \item Používateľ si môže vybrať, kam chce prijatý súbor uložiť.

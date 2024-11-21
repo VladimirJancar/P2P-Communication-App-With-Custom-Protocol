@@ -14,7 +14,6 @@ FILE_TRANSFERING = False
 
 #TODO limit max char limit for text message
 #TODO arq, ukončenie spojenia po timeoute na oboch stranách
-#TODO DOC: arq diagram
 #TODO DOC: ARQ: send packets on one thread and receive acks on second one; if err packet is received, resend fragment; if fragment missing, resend
 #TODO add packet corruption / checksum
 
