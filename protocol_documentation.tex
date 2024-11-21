@@ -106,17 +106,8 @@ Kontrolný súčet je 16-bitová hodnota vypočítaná nasledovne:
     \end{enumerate}
 
     \subsection{Spoľahlivý prenos údajov}\label{prenos}
-    Protokol zabezpečuje spoľahlivý prenos údajov spôsobom \textbf{Stop \& wait Automatic Repeat Request (S\&W ARQ)}. To znamená, že po každom poslanom packete musí odosielateľ čakať na odpoveď od prijímateľa. Na základe tejto odpovede sa buď pošle packet znova, alebo sa pošle ďalší. Celý proces vyzerá nasledovne:
+    Protokol zabezpečuje spoľahlivý prenos údajov pomocou vlastnej variácie ARQ. Jeden thread odosiela fragmenty a druhý čaká na ACK packety. Vždy keď sa odošle fragment, pridá sa jeho sekvenčné číslo do zoznamu \textbf{unacknowledged packets}. Keď príde potvrdenie o úspešnom prijatí fragmentu (ACK packet s poradovým číslom prijatého fragmentu), sekvenčné číslo sa zo zoznamu nepotvrdených packetov odstráni. Ak ostali nejaké nepotvrdené packety v zozname, odošlú sa znova. Ak ktorákoľvek strana nedostane odpoveď na 3 po sebe idúce heartbeat packety, spojenie sa ukončí a zobrazí sa správa o neúspešnom prenose súboru. V prípade dočasného prerušenia sa prenost údajov obnoví.
 
-    \begin{enumerate}
-        \item Odosielateľ pošle packet so špecifickým poradovým číslom (sequence number)\footnote{ide o globálne poradie, takže každá správa má vlastné číslo. V prípade, že sa dovŕši maximum, poradie začína opäť od nuly. Pri fragmentácii (\ref{frag}) majú všetky fragmenty rovnaké poradové číslo.} a čaká na odpoveď od prijímateľa. 
-	\item Na základe odpovede môžu nastať tieto prípady:	
-	\begin{itemize}        
-		\item Ak nedostane odosielateľ odpoveď do 250ms, vyšle rovnaký packet znova a čaká. To sa opakuje až kým nedostane odpoveď alebo kým nie je komunikácia prerušená.
-		\item Keď je v prijatom packete nájdená chyba (checksum od odosielateľa sa nezhoduje s checksumom vypočítaným prijímateľom), odošle sa ako odpoveď packet s rovnakým poradovým číslom v Acknowledgement field a ERR flagom s hodnotou 1. Odosielateľ po tejto odpovedi pošle rovnaký packet znova.
-	        \item Ak je prijatý packet v poriadku, odošle sa odpoveď vo forme packetu s rovnakým poradovým číslom v acknowledgement field a ACK flagom s hodnotou 1.
-   	\end{itemize}
-    \end{enumerate}
 
     \subsection{Nadviazanie spojenia}
 	Predtým, než bude možné si vymienať údaje, musia sa oba uzly presvedčiť, že druhá strana je pripravená komunikovať. K tomuto účelu slúži tzv. \textbf{3-Way Handshake} (Obr. \ref{fig:handshake_diagram}), ktorý pozostáva z nasledujúcich krokov:
@@ -214,6 +205,7 @@ Kontrolný súčet je 16-bitová hodnota vypočítaná nasledovne:
 \section{Zmeny oproti pôvodnému návrhu}
 	\begin{itemize}
 	    \item Zmena spôsobu ukončenia spojenia. Namiesto 4-way termination sa používa 3-way termination.
+	    \item Zjednodušenie ARQ systému. Prechod zo S\&W na vlastnú variáciu.
 	    \item Pridanie príkazov /setfragsize, /send.
 	    \item Prijímanie správ a prijímanie súborov sa deje v rozdielnych threadoch.
 	    \item Používateľ si môže vybrať, kam chce prijatý súbor uložiť.

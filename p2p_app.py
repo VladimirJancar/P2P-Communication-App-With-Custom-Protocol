@@ -5,16 +5,17 @@ import struct
 import os
 import time
 
-
 MAX_SEQUENCE_NUMBER = 65535 #TODO
 MAX_FRAGMENT_SIZE = 600
 FILE_TRANSFERING = False 
 #TODO Pozor na veľkosť poľa "sequence number" / "poradové číslo fragmentu". V požiadavkách máte, že musíte vedieť preniesť 2MB súbor. Keď nastavím veľmi malú veľkosť fragmentu, tak môžete mať povedzme aj 100 000 fragmentov. A také číslo sa vam do 2-bajtového poľa nezmestí. Rátajte s najmenšou veľkosťou fragmentu 1 bajt, pri testovaní zadania môžeme použiť aj túto hodnotu a musí sa vám súbor korektne poslať
-
+#TODO DOC: header sizes (32 bits?)
 #TODO zistit ako sa robi ethernetove spojenie
 
-#TODO arq
+#TODO limit max char limit for text message
+#TODO arq, ukončenie spojenia po timeoute na oboch stranách
 #TODO DOC: arq diagram
+#TODO DOC: ARQ: send packets on one thread and receive acks on second one; if err packet is received, resend fragment; if fragment missing, resend
 #TODO add packet corruption / checksum
 
 #TODO DOC: disconnect diagram (3-way handshake)
@@ -151,7 +152,7 @@ class Peer:
                 #print(f"Error: {e}")
                 time.sleep(1)
 
-    def handlePacket(self, packet, addr): #TODO!
+    def handlePacket(self, packet, addr):
         global last_heartbeat_ack
         global FILE_TRANSFERING
         
@@ -292,7 +293,7 @@ class Packet:
         flags = (self.ack << 7) | (self.syn << 6) | (self.fin << 5) | (self.err << 4) | (self.sfs << 3) | (self.lfg << 2) | (self.ftr << 1)
         checksum = 1#self.calculateChecksum#!(self.data.encode('utf-8'))
         header = struct.pack(
-            '!IIBH', #TODO DOCUMENTATIO 32 bits, 
+            '!IIBH',
             self.ack_num,          # 16b
             self.seq_num,          # 16b
             flags,                 # 8b
@@ -339,7 +340,6 @@ class Packet:
 
 
 class FileTransfer:
-    #TODO DOCUMENTATION: ARQ: send packets on one thread and receive acks on second one; if err packet is received, resend fragment; if fragment missing, resend
     def __init__(self, protocol, timeout=2):
         self.unacknowledged_packets = {}
         self.file_seq_num = 1
