@@ -12,11 +12,14 @@ FILE_TRANSFERING = False
 #TODO Pozor na veľkosť poľa "sequence number" / "poradové číslo fragmentu". V požiadavkách máte, že musíte vedieť preniesť 2MB súbor. Keď nastavím veľmi malú veľkosť fragmentu, tak môžete mať povedzme aj 100 000 fragmentov. A také číslo sa vam do 2-bajtového poľa nezmestí. Rátajte s najmenšou veľkosťou fragmentu 1 bajt, pri testovaní zadania môžeme použiť aj túto hodnotu a musí sa vám súbor korektne poslať
 
 #TODO zistit ako sa robi ethernetove spojenie
-#TODO finish protocol
-#TODO upravit protokol podla bodov v hodnoteni
 
 #TODO arq
+#TODO DOC: arq diagram
 #TODO add packet corruption / checksum
+
+#TODO DOC: disconnect diagram (3-way handshake)
+#TODO lua script
+#TODO DOC ukazka testovania
 
 class Peer:
     def __init__(self, ip, port, dest_ip, dest_port, protocol):
@@ -25,7 +28,7 @@ class Peer:
         self.dest_ip = dest_ip
         self.dest_port = dest_port
         self.protocol = protocol
-        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) #UDP?
         self.socket.bind((self.ip, self.port))
         
         self.active = False
@@ -59,7 +62,6 @@ class Peer:
                 continue
 
     def handshake(self):
-        #TODO include handshake initialization to documentation if needed
         if not self.active:
             syn_packet = Packet(ack_num=0, seq_num=1, syn=1, ack=0, fin=0)
             self.socket.sendto(syn_packet.toBytes(), (self.dest_ip, self.dest_port))
@@ -122,7 +124,6 @@ class Peer:
         self.heartbeat_retries += 1  # Increment retry count
 
     def handleConnectionLost(self):
-        #TODO add handle disconnection to documentation: tries to reconnect again with handshake, keeps file transfer info; but only reconnects if the connection wasnt manually terminated
         if not self.connection_terminated:
             print("Connection lost.")
             self.active = False
@@ -130,11 +131,7 @@ class Peer:
             self.socket.close()
             self.__init__(self.ip, self.port, self.dest_ip, self.dest_port, self.protocol)
             self.start()
-
-        # If the transfer was interrupted, resume the transfer here
-        # if self.file_transfer.in_progress:
-        #     self.file_transfer.resumeTransfer(self) #TODO
-            
+      
     def sendPacket(self, dest_ip, dest_port, packet):
         self.socket.sendto(packet.toBytes(), (dest_ip, dest_port))
 
@@ -212,7 +209,6 @@ class Peer:
                     self.setFragmentSize(new_size)
                 except ValueError:
                     print("Invalid command. Usage: /setfragsize <size>")
-            #TODO add commands to documentation
             elif user_input.startswith("/send "):
                 file_path = user_input[6:].strip()
                 self.sendFile(file_path)
@@ -223,7 +219,6 @@ class Peer:
 
     def sendFile(self, file_path):
         global FILE_TRANSFERING
-        #TODO DOCUMENTATION: ftr packets have their own ack_num 
         self.file_transfer = FileTransfer(protocol)
         try:
             if os.path.exists(file_path):
@@ -247,13 +242,13 @@ class Peer:
     def setFragmentSize(self, new_size):
         if self.protocol.setFragmentSize(new_size):
             print(f"Fragment size set to {new_size} bytes.")
-            #TODO add sfs packet receiving to documentation
+            #TODO add sfs packet receiving and sending the size to set
             ack_packet = Packet(ack=1, sfs=1, data=f"Fragment size set to {new_size}")
             self.sendPacket(self.dest_ip, self.dest_port, ack_packet)
         else:
             print(f"Invalid fragment size. Must be between 1 and {MAX_FRAGMENT_SIZE} bytes.")
 
-    def trerminateConnection(self): #TODO DOCUMENTATION: update to 2-way disconnect handshake (fin, ack)
+    def trerminateConnection(self):
         self.message_seq_num = (self.message_seq_num + 1) % (MAX_SEQUENCE_NUMBER + 1)
         if self.message_seq_num == 0: 
             self.message_seq_num = 1
@@ -275,13 +270,12 @@ class Protocol:
         return True
 
     def fragmentData(self, data):
-        #TODO add explanation of setting frag size with /setfragsize N, sfs-ack, sfs-err packets; lfg is 1 if
         fragments = [data[i:i + self.frag_size] for i in range(0, len(data), self.frag_size)]
         return fragments
 
 
 class Packet:
-    def __init__(self, ack_num=0, seq_num=0, ack=0, syn=0, fin=0, err=0, sfs=0, lfg=0, ftr=0, checksum=0, data_length=0, data=""):
+    def __init__(self, ack_num=0, seq_num=0, ack=0, syn=0, fin=0, err=0, sfs=0, lfg=0, ftr=0, checksum=0, data=""):
         self.ack_num = ack_num
         self.seq_num = seq_num
         self.ack = ack
@@ -292,7 +286,6 @@ class Packet:
         self.lfg = lfg
         self.ftr = ftr
         self.checksum = checksum
-        self.data_length = data_length #TODO remove data len, dont use it and remove from documentation
         self.data = data
 
     def toBytes(self):
@@ -301,7 +294,7 @@ class Packet:
         header = struct.pack(
             '!IIBH', #TODO DOCUMENTATIO 32 bits, 
             self.ack_num,          # 16b
-            self.seq_num,          # 16b #TODO update documentation: removed fragment num
+            self.seq_num,          # 16b
             flags,                 # 8b
             checksum,              # 16b
         )
@@ -309,7 +302,6 @@ class Packet:
 
     @staticmethod
     def fromBytes(packet):
-        #TODO Update documentation (changes): removed total_fragments field, added LFG (last fragment) flag, added SFS (set fragment size) flag, added FTR (file transfer) flag;
         header = packet[:11]
         ack_num, seq_num, flags, checksum = struct.unpack('!IIBH', header)
         data = packet[11:].decode('utf-8')
@@ -347,7 +339,6 @@ class Packet:
 
 
 class FileTransfer:
-    #TODO DOCUMENTATION: ack_num/seq_num should reset with every file; the files have their own ack_num and messages too; 
     #TODO DOCUMENTATION: ARQ: send packets on one thread and receive acks on second one; if err packet is received, resend fragment; if fragment missing, resend
     def __init__(self, protocol, timeout=2):
         self.unacknowledged_packets = {}

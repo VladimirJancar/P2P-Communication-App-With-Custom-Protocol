@@ -129,6 +129,7 @@ Kontrolný súčet je 16-bitová hodnota vypočítaná nasledovne:
 	    \item 
 		Nakonie iniciátor spojenia na SYN-ACK packet odpovie odoslaním ACK packetu, kde \textbf{(Ack=Y+1)}. Potom je spojenie úspešne naviazané.
 	\end{enumerate}
+	Na začiatku sa oba uzly snažia byť iniciátorom, teda posielajú SYN packety. Ten, kto zaznamená SYN packet ako prvý, na neho automaticky odpovedá.	
 
 	\begin{figure}[h]
 		\centering
@@ -143,15 +144,16 @@ Kontrolný súčet je 16-bitová hodnota vypočítaná nasledovne:
 
 	\begin{itemize}
 	\item Ak nedostane komunikátor odpoveď na žiaden z heartbeat packetov, vypíše informačnú správu pre používateľa o ukončení spojenia. V prípade, že sa spojenie prerušilo počas prenosu textu alebo súboru, vypíše aj to, že prenos zlyhal.
+	\item V prípade, že spojenie nebolo prerušené manuálne jedným z používateľov, komunik8tor sa snaží opäť nadviazať kontakt pomocou 3-way handshake.
 	\item Ak sa podarí obnoviť spojenie (komunikátor dostane odpoveď aspoň na posledný odoslaný heartbeat packet) a prerušenie nastalo počas prenosu textu alebo súboru, pokúsi sa v pokračovať v prenose tam, kde sa spojenie prerušilo.
    	\end{itemize}
 
 	\subsection{Ukončenie spojenia}
-		V protokole prebieha ukončenie spojenia podobne ako pri TCP (4-way termination) (Obr \ref{fig:disconnect_diagram}). Proces vyzerá nasledovne:
+		V protokole prebieha ukončenie spojenia pomocou 3-way termination) (Obr. \ref{fig:disconnect_diagram}). Proces vyzerá nasledovne:
 		\begin{enumerate}
 			\item Odosielateľ pošle packet s flagom \textbf{FIN=1} a poradovým číslom (Seq=X).
 			\item Po prijatí FIN packetu druhý uzol odpovie odoslaním packetu s flagom \textbf{ACK=1} a rovnakým poradovým číslom. Následne odošle aj FIN packet s novým poardovým číslom (Seq=X+1).
-			\item Prvý odosielateľ po prijatí FIN packetu odošle posledný ACK packet, čím definitívne potvrdzuje ukončenie spojenia.
+			\item Keď prvý odosielateľ prijme FIN packet, definitívne sa ukončuje spojenie oboch uzlov.
 
 		\end{enumerate}
 			
@@ -180,10 +182,20 @@ Kontrolný súčet je 16-bitová hodnota vypočítaná nasledovne:
 
 	\begin{enumerate}
 		\item Veľká správa sa rozdelí na niekoľko menších fragmentov, pričom každá z nich obsahuje časť pôvodnej správy má rovnaké poradové číslo (sequence number v hlavičke protokolu). Každý fragment má osobitné fragmentové číslo, ktoré označuje jeho poradie medzi zvyšnými fragmentami.\footnote{Maximálna veľkosť fragmentu je okrem používateľského vstupu ohraničená aj maximálnou veľkosťou UDP packetov (${2}^{16}$ bitov).}
-		\item Prijímateľ postupne dostane všetky fragmenty, pričom podľa poradového čísla a fragmentového čísla rozpozná, že patria k tej istej správe a v akom poradí ich následne treba poskladať. Pred poskladaním sa každý fragment skontroluje (vypočíta sa checksum pomocou CRC16). Ak je fragment poškodený, odošle sa naspäť hlásenie o chybe (ERR packet) a fragment sa získa od odosielateľa znova.
+		\item Prvý odoslaný packet je špeciálny. Ide o režijný packet so sekvenčným číslo 0 a vlajkami ACK=1 a FTR=1. Obsahuje v dátovej časti celkový počet očakávaných fragmentov a meno prenášaného súboru. Ostatné packety s fragmentami súboru sú označené vlajkou FTR=1
+		\item Prijímateľ postupne dostane všetky fragmenty, pričom podľa poradového čísla rozpozná, že patria k tej istej správe a v akom poradí ich následne treba poskladať. Posledný fragmentový packet súboru je označený vlajkou LFG=1 (Last fragment). Pred poskladaním sa každý fragment skontroluje (vypočíta sa checksum pomocou CRC16). Ak je fragment poškodený, odošle sa naspäť hlásenie o chybe (ERR packet) a fragment sa získa od odosielateľa znova.
 		\item Nakoniec sa všetky fragmenty zoradia podľa fragmentových čísel a spoja sa do výslednej správy.
 	\end{enumerate}
-
+    
+     \subsection{Príkazy a používateľský vstup}
+	Program podporuje tri príkazy:
+	\begin{itemize}
+		\item \textbf{/setfragsize <size>} pre nastavenie veľkosti fragmentov. Po zadaní tohoto príkazu sa odošle druhému uzlu packet s vlajkou SFS=1 a požadovanou veľkosťou fragmentov.
+		\item Zahodenie niektorých packetov.
+		\item Duplikovanie niektorých packetov. 
+	\end{itemize}
+  
+\textbf{/disconnect} pre manuálne ukončenie spojenia (inicializáciu 3-way termination) a na záver \textbf{/send <file>}. Pre prijímaní súboru je používateľovi daná možnost uložiť ho v akomkoľvek priečinku (zadaním cesty k nemu). Ak zadaná cesta nie je valídna alebo bol vstup prázdny, súbor sa uloží do priečinka predvoleného systémom.
 
     \subsection{Vytváranie a riešenie chýb}
     Protokol zahŕňa mechanizmy na detekciu a požiadanie o opätovné odoslanie stratených alebo poškodených packetov. Pre ich otestovanie sa v implementácii nachádzajú spôsoby, ako zámerne vytvárať chyby:
@@ -198,6 +210,17 @@ Kontrolný súčet je 16-bitová hodnota vypočítaná nasledovne:
 
 \section{Záver}
 	Úspešne sme navrhli a implementovali vlastný protokol na jednoduchý, no spoľahlivý prenos údajov spôsobom \textit{Stop-and-Wait ARQ}. Protokol umožňuje fragmentáciu správ, kontrolu integrity pomocou CRC-16 a zabezpečuje spoľahlivé spojenie vďaka Keep-Alive systému a nadviazaním spojenia cez 3-way handshake. Prenášané packety sú viditeľné prostredníctvom programu Wireshark a sú v nej rozoznateľné polia nášho vlastného protokolu.
+
+\section{Zmeny oproti pôvodnému návrhu}
+	\begin{itemize}
+	    \item Zmena spôsobu ukončenia spojenia. Namiesto 4-way termination sa používa 3-way termination.
+	    \item Pridanie príkazov /setfragsize, /send.
+	    \item Prijímanie správ a prijímanie súborov sa deje v rozdielnych threadoch.
+	    \item Používateľ si môže vybrať, kam chce prijatý súbor uložiť.
+	    \item Prenášané správy a prenášané súbory majú osobitné sequence numbers, pričom packety určené na prenos súborov sú označené flagom FTR (File transfer).
+	    \item Z hlavičky protokolu boli z redundantnosti odstránené fragmentové číslo, počet fragmentov a dĺžka údajov.
+            \item Do hlavičky boli pridané vlajky LFG (Last fragment), SFS (Set fragment size), FTR (File transfer).
+	\end{itemize}
 
 \section{Zdroje}
 	\begin{itemize}
