@@ -6,8 +6,9 @@ import os
 import time
 
 
-MAX_SEQUENCE_NUMBER = 65535
-MAX_FRAGMENT_SIZE = 1 #TODO cant go above
+MAX_SEQUENCE_NUMBER = 65535 #TODO
+MAX_FRAGMENT_SIZE = 600
+FILE_TRANSFERING = False 
 #TODO Pozor na veľkosť poľa "sequence number" / "poradové číslo fragmentu". V požiadavkách máte, že musíte vedieť preniesť 2MB súbor. Keď nastavím veľmi malú veľkosť fragmentu, tak môžete mať povedzme aj 100 000 fragmentov. A také číslo sa vam do 2-bajtového poľa nezmestí. Rátajte s najmenšou veľkosťou fragmentu 1 bajt, pri testovaní zadania môžeme použiť aj túto hodnotu a musí sa vám súbor korektne poslať
 
 #TODO zistit ako sa robi ethernetove spojenie
@@ -91,6 +92,9 @@ class Peer:
         while not self.active:
             continue
         while self.active:
+            while FILE_TRANSFERING:
+                continue
+
             last_heartbeat_ack = False
 
             heartbeat_packet = Packet(ack=1, seq_num=0)
@@ -132,13 +136,14 @@ class Peer:
         #     self.file_transfer.resumeTransfer(self) #TODO
             
     def sendPacket(self, dest_ip, dest_port, packet):
-        packet.ack_num = self.file_receiver.next_expected_seq
         self.socket.sendto(packet.toBytes(), (dest_ip, dest_port))
 
     def receiveMessages(self):
         while not self.active:
             continue
         while self.active:
+            while FILE_TRANSFERING:
+                continue
             try:
                 data, addr = self.socket.recvfrom(1024)
                 packet = Packet.fromBytes(data)
@@ -151,6 +156,7 @@ class Peer:
 
     def handlePacket(self, packet, addr): #TODO!
         global last_heartbeat_ack
+        global FILE_TRANSFERING
         
         if packet.fin == 1:
             print("FIN received from peer. Sending ACK...")
@@ -160,7 +166,6 @@ class Peer:
             self.connection_terminated = True
             self.socket.close()
             print("Connection terminated successfully.")
-
            
         elif packet.ack == 1 and self.expected_fin_ack == packet.seq_num:
             print("ACK received for my FIN.")
@@ -176,11 +181,13 @@ class Peer:
         elif packet.seq_num > 0:  # Data packet
             #if packet.seq_num == self.file_receiver.next_expected_seq: #TODO
                 if packet.ftr == 1:  # File transfer packet
-                    self.file_receiver.receiveFragment(packet)
-                    self.file_receiver.next_expected_seq += 1
-
-                    if self.file_receiver.file_complete:
-                        self.file_receiver = FileReceiver()
+                    print("received ftf packet")
+                    FILE_TRANSFERING = True
+                    self.file_receiver = FileReceiver()
+                    self.file_receiver.handleFragment(packet)
+                    self.file_receiver.receivePackets(self.socket)
+                    # if self.file_receiver.file_complete:
+                    #     self.file_receiver = FileReceiver()
                     
                 else:
                     print(f"\n{addr[0]}:{addr[1]} >> {packet.data}")
@@ -193,6 +200,9 @@ class Peer:
     def handleInput(self):
         while not self.active: continue
         while self.active:
+            while FILE_TRANSFERING:
+                continue
+
             user_input = input("\n")
             if not self.active: break
 
@@ -212,10 +222,12 @@ class Peer:
                 self.sendTextMessage(user_input)
 
     def sendFile(self, file_path):
+        global FILE_TRANSFERING
         #TODO DOCUMENTATION: ftr packets have their own ack_num 
         self.file_transfer = FileTransfer(protocol)
         try:
             if os.path.exists(file_path):
+                FILE_TRANSFERING = True
                 print(f"Sending file: {file_path}")
                 self.file_transfer.sendFile(self, self.dest_ip, self.dest_port, file_path)
             else:
@@ -335,48 +347,90 @@ class Packet:
 
 
 class FileTransfer:
-    #TODO DOCUMENTATION: ack_num should reset with every file; the files have their own ack_num and messages too
-    def __init__(self, protocol):
+    #TODO DOCUMENTATION: ack_num/seq_num should reset with every file; the files have their own ack_num and messages too; 
+    #TODO DOCUMENTATION: ARQ: send packets on one thread and receive acks on second one; if err packet is received, resend fragment; if fragment missing, resend
+    def __init__(self, protocol, timeout=2):
+        self.unacknowledged_packets = {}
         self.file_seq_num = 1
         self.protocol = protocol
+        self.timeout = timeout
+        self.total_fragments = 0
+
+    def sendFragments(self, peer, dest_ip, dest_port, fragments):
+        for seq_num, fragment in enumerate(fragments, start=1):
+            packet = Packet(
+                seq_num=seq_num, 
+                lfg=(1 if seq_num == self.total_fragments else 0),  # Last fragment flag
+                ftr=1,
+                data=fragment
+            )
+
+            self.unacknowledged_packets[seq_num] = packet
+
+            peer.sendPacket(dest_ip, dest_port, packet)
+            print(f"\rFragments > {seq_num}/{self.total_fragments} sent", end="", flush=True)
+
+        print("\nFile sent successfully.")
+
+    def receiveAcks(self):
+        while True:
+            try:
+                ack_data, _ = peer.socket.recvfrom(1024)
+                ack_packet = Packet.fromBytes(ack_data)
+
+                if ack_packet.ack == 1: # ACK
+                    seq_num = ack_packet.ack_num
+                    if seq_num in self.unacknowledged_packets:
+                        del self.unacknowledged_packets[seq_num]
+                        #print(f"Fragments > {seq_num}/{self.total_fragments} acknowledged", end="", flush=True)
+                
+                elif ack_packet.err == 1:  # Err packet with missing seq_num
+                    missing_seq = ack_packet.ack_num
+                    if missing_seq in self.unacknowledged_packets:
+                        packet = self.unacknowledged_packets[missing_seq]
+                        peer.sendPacket(peer.dest_ip, peer.dest_port, packet)
+                        print(f"Retransmitted missing packet {missing_seq}")
+
+            except socket.timeout:
+                #TODOprint(f"Timeout: Resending packet {i + 1}")
+                continue
+            except Exception as e:
+                break
 
     def sendFile(self, peer, dest_ip, dest_port, file_path):
+        global FILE_TRANSFERING
         try:
             filename = os.path.basename(file_path)
             with open(file_path, 'rb') as file:
                 data = file.read()
                 fragments = self.protocol.fragmentData(data.decode('latin1'))
-                total_fragments = len(fragments)
+                self.total_fragments = len(fragments)
 
                 # Send setup packet with total_fragments and filename
                 setup_packet = Packet(
                     seq_num=self.file_seq_num,
                     ftr=1,
                     ack=1,
-                    lfg=0,
-                    data=f"{total_fragments:08x}|{filename}"
+                    data=f"{self.total_fragments:08x}|{filename}"
                 )
                 peer.sendPacket(dest_ip, dest_port, setup_packet)
 
-                for i, fragment in enumerate(fragments):
-                    packet = Packet(
-                        seq_num=(i + 1), 
-                        lfg=(1 if i == len(fragments) - 1 else 0),  # Last fragment flag
-                        ftr=1,
-                        data=fragment
-                    )
-                    peer.sendPacket(dest_ip, dest_port, packet)
+                # Start sending and receiving threads
+                send_thread = threading.Thread(target=self.sendFragments, args=(peer, dest_ip, dest_port, fragments))
+                ack_thread = threading.Thread(target=self.receiveAcks, args=(peer))
 
-                    # Show progress
-                    print(f"\rSent {i + 1}/{total_fragments} packets", end="", flush=True)
+                send_thread.start()
+                ack_thread.start()
 
-                    
-
-                print("\nFile sent successfully.")
+                send_thread.join()
+                ack_thread.join()                   
+                
         except FileNotFoundError:
             print("Error: File not found.")
         except Exception as e:
             print(f"Error sending file: {e}")
+        
+        FILE_TRANSFERING = False
 
 
 class FileReceiver:
@@ -385,15 +439,26 @@ class FileReceiver:
         self.expected_fragments = None  # Total fragments to expect
         self.file_complete = False
         self.current_filename = None  # Track the file being received
-        self.next_expected_seq = 1
+        self.expected_seq = 1
 
         self.wrap_count = 0
 
-    def receiveFragment(self, packet):
-        if packet.ftr != 1:  # Ignore non-file transfer packets
+    def receivePackets(self, socket):        
+        while FILE_TRANSFERING:
+            try:
+                data, addr = socket.recvfrom(1024)
+                packet = Packet.fromBytes(data)
+                self.handleFragment(packet)
+            except socket.timeout:
+                continue
+            except Exception as e:
+                print(f"Error: {e}")
+
+    def handleFragment(self, packet):
+        if packet.ftr != 1:
             return
 
-        if packet.ack == 1:  # Handle filename packet
+        if packet.ack == 1:  # Filename packet
             try:
                 total_fragments_hex, filename = packet.data.split('|', 1)
                 self.expected_fragments = int(total_fragments_hex, 16)
@@ -404,10 +469,21 @@ class FileReceiver:
             return
 
         # Handle fragment packet
-        wrapped_seq_num = packet.seq_num
-        self.file_fragments[wrapped_seq_num] = packet.data
+        seq_num = packet.seq_num
+        # if seq_num == self.expected_seq:
+        self.file_fragments[seq_num] = packet.data
 
-        #
+            # Send ACK for received packet
+        ack_packet = Packet(
+            ack=1,
+            ack_num=seq_num
+        )
+        peer.sendPacket(peer.dest_ip, peer.dest_port, ack_packet)
+        #print(f"ACK sent for packet {seq_num}")
+
+        self.expected_seq += 1
+        #else:
+        #    print(f"Out-of-order or duplicate packet {seq_num}. Expected {self.next_expected_seq}")
 
         # Show progress
         if self.expected_fragments:
@@ -418,9 +494,8 @@ class FileReceiver:
             self.reconstructFile()
             self.file_complete = True
                 
-
-
     def reconstructFile(self):
+        global FILE_TRANSFERING
         save_path = input("Enter path to save the file << ")
         if not os.path.exists(save_path):
             print("Path does not exist, saving to default download directory...")
@@ -433,6 +508,8 @@ class FileReceiver:
             for seq_num in sorted(self.file_fragments.keys()):
                 f.write(self.file_fragments[seq_num].encode('latin1'))
         print(f"File successfully received and saved as \"{save_path}\".")
+        FILE_TRANSFERING = False
+
 
 
 if __name__ == '__main__':
