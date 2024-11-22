@@ -163,6 +163,10 @@ class Peer:
             self.connection_terminated = True
             self.socket.close()
             print("Connection terminated successfully.")
+
+        elif packet.sfs == 1:
+            print(f"Fragment size set to {int(packet.data)} bytes.")
+            self.protocol.setFragmentSize(int(packet.data))
            
         elif packet.ack == 1 and self.expected_fin_ack == packet.seq_num:
             print("ACK received for my FIN.")
@@ -189,7 +193,6 @@ class Peer:
                 else:
                     print(f"\n{addr[0]}:{addr[1]} >> {packet.data}")
 
-        #TODO handle setfragsize
             #else:
                 #TODO handle out of order packet
                 #print(f"Out-of-order packet received: {packet.seq_num}, expected {self.file_receiver.next_expected_seq}")     
@@ -242,9 +245,8 @@ class Peer:
     def setFragmentSize(self, new_size):
         if self.protocol.setFragmentSize(new_size):
             print(f"Fragment size set to {new_size} bytes.")
-            #TODO add sfs packet receiving and sending the size to set
-            ack_packet = Packet(ack=1, sfs=1, data=f"Fragment size set to {new_size}")
-            self.sendPacket(self.dest_ip, self.dest_port, ack_packet)
+            packet = Packet(ack=1, sfs=1, data=f"{new_size}")
+            self.sendPacket(self.dest_ip, self.dest_port, packet)
         else:
             print(f"Invalid fragment size. Must be between 1 and {MAX_FRAGMENT_SIZE} bytes.")
 
@@ -345,6 +347,7 @@ class FileTransfer:
         self.protocol = protocol
         self.timeout = timeout
         self.total_fragments = 0
+        self.acknowledged = 0
 
     def sendFragments(self, peer, dest_ip, dest_port, fragments):
         for seq_num, fragment in enumerate(fragments, start=1):
@@ -358,7 +361,7 @@ class FileTransfer:
             self.unacknowledged_packets[seq_num] = packet
 
             peer.sendPacket(dest_ip, dest_port, packet)
-            print(f"\rFragments > {seq_num}/{self.total_fragments} sent", end="", flush=True)
+            print(f"\rFragments > {seq_num}/{self.total_fragments} sent, {self.acknowledged}/{self.total_fragments} acknowledged", end="", flush=True)
 
         print("\nFile sent successfully.")
 
@@ -371,9 +374,9 @@ class FileTransfer:
                 if ack_packet.ack == 1: # ACK
                     seq_num = ack_packet.ack_num
                     if seq_num in self.unacknowledged_packets:
+                        self.acknowledged += 1
                         del self.unacknowledged_packets[seq_num]
-                        #print(f"Fragments > {seq_num}/{self.total_fragments} acknowledged", end="", flush=True)
-                
+                        
                 elif ack_packet.err == 1:  # Err packet with missing seq_num
                     missing_seq = ack_packet.ack_num
                     if missing_seq in self.unacknowledged_packets:
@@ -407,13 +410,13 @@ class FileTransfer:
 
                 # Start sending and receiving threads
                 send_thread = threading.Thread(target=self.sendFragments, args=(peer, dest_ip, dest_port, fragments))
-                ack_thread = threading.Thread(target=self.receiveAcks, args=(peer))
+                ack_thread = threading.Thread(target=self.receiveAcks, args=())
 
                 send_thread.start()
                 ack_thread.start()
 
-                send_thread.join()
-                ack_thread.join()                   
+                # send_thread.join()
+                # ack_thread.join()                   
                 
         except FileNotFoundError:
             print("Error: File not found.")
@@ -458,18 +461,18 @@ class FileReceiver:
                 print("Error parsing header packet.")
             return
 
-        # Handle fragment packet
+        
+        #TODO if fragment okay
+        
         seq_num = packet.seq_num
-        # if seq_num == self.expected_seq:
         self.file_fragments[seq_num] = packet.data
 
-            # Send ACK for received packet
+        
         ack_packet = Packet(
             ack=1,
             ack_num=seq_num
         )
         peer.sendPacket(peer.dest_ip, peer.dest_port, ack_packet)
-        #print(f"ACK sent for packet {seq_num}")
 
         self.expected_seq += 1
         #else:
