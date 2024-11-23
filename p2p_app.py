@@ -8,16 +8,16 @@ import time
 MAX_SEQUENCE_NUMBER = 65535 #TODO
 MAX_FRAGMENT_SIZE = 600
 FILE_TRANSFERING = False 
+#! TODO uncomment ip input
 #TODO Pozor na veľkosť poľa "sequence number" / "poradové číslo fragmentu". V požiadavkách máte, že musíte vedieť preniesť 2MB súbor. Keď nastavím veľmi malú veľkosť fragmentu, tak môžete mať povedzme aj 100 000 fragmentov. A také číslo sa vam do 2-bajtového poľa nezmestí. Rátajte s najmenšou veľkosťou fragmentu 1 bajt, pri testovaní zadania môžeme použiť aj túto hodnotu a musí sa vám súbor korektne poslať
 #TODO DOC: header sizes (32 bits?)
 #TODO zistit ako sa robi ethernetove spojenie
 
 #TODO limit max char limit for text message
 #TODO arq, ukončenie spojenia po timeoute na oboch stranách
-#TODO DOC: ARQ: send packets on one thread and receive acks on second one; if err packet is received, resend fragment; if fragment missing, resend
+
 #TODO add packet corruption / checksum
 
-#TODO DOC: disconnect diagram (3-way handshake)
 #TODO lua script
 #TODO DOC ukazka testovania
 
@@ -190,7 +190,7 @@ class Peer:
                     # if self.file_receiver.file_complete:
                     #     self.file_receiver = FileReceiver()
                     
-                else:
+                elif packet.ack != 1 and packet.syn != 1:
                     print(f"\n{addr[0]}:{addr[1]} >> {packet.data}")
 
             #else:
@@ -218,7 +218,10 @@ class Peer:
             elif user_input.startswith("/disconnect"):
                 self.trerminateConnection()
             else:
-                self.sendTextMessage(user_input)
+                if (len(user_input) < MAX_FRAGMENT_SIZE):
+                    self.sendTextMessage(user_input)
+                else:
+                    print("Message too long.")
 
     def sendFile(self, file_path):
         global FILE_TRANSFERING
@@ -292,7 +295,7 @@ class Packet:
 
     def toBytes(self):
         flags = (self.ack << 7) | (self.syn << 6) | (self.fin << 5) | (self.err << 4) | (self.sfs << 3) | (self.lfg << 2) | (self.ftr << 1)
-        checksum = 1#self.calculateChecksum#!(self.data.encode('utf-8'))
+        checksum = self.calculateChecksum(self.data.encode('utf-8'))
         header = struct.pack(
             '!IIBH',
             self.ack_num,          # 16b
@@ -363,7 +366,6 @@ class FileTransfer:
             peer.sendPacket(dest_ip, dest_port, packet)
             print(f"\rFragments > {seq_num}/{self.total_fragments} sent, {self.acknowledged}/{self.total_fragments} acknowledged", end="", flush=True)
 
-        print("\nFile sent successfully.")
 
     def receiveAcks(self):
         while True:
@@ -389,6 +391,13 @@ class FileTransfer:
                 continue
             except Exception as e:
                 break
+
+            if (len(self.unacknowledged_packets) == 0):
+                print("\nFile sent successfully.")
+                FILE_TRANSFERING = False
+                #TODO file transfering successful even when no all acks received
+                break
+            
 
     def sendFile(self, peer, dest_ip, dest_port, file_path):
         global FILE_TRANSFERING
@@ -441,7 +450,7 @@ class FileReceiver:
             try:
                 data, addr = socket.recvfrom(1024)
                 packet = Packet.fromBytes(data)
-                self.handleFragment(packet)
+                self.handleFragment(packet) #TODO close upon completion
             except socket.timeout:
                 continue
             except Exception as e:
@@ -463,29 +472,27 @@ class FileReceiver:
 
         
         #TODO if fragment okay
-        
-        seq_num = packet.seq_num
-        self.file_fragments[seq_num] = packet.data
+        if (packet.checksum == packet.calculateChecksum(packet.data.encode('utf-8'))):
+            seq_num = packet.seq_num
+            self.file_fragments[seq_num] = packet.data
+            
+            ack_packet = Packet(
+                ack=1,
+                ack_num=seq_num
+            )
+            peer.sendPacket(peer.dest_ip, peer.dest_port, ack_packet)
 
-        
-        ack_packet = Packet(
-            ack=1,
-            ack_num=seq_num
-        )
-        peer.sendPacket(peer.dest_ip, peer.dest_port, ack_packet)
+            self.expected_seq += 1
 
-        self.expected_seq += 1
-        #else:
-        #    print(f"Out-of-order or duplicate packet {seq_num}. Expected {self.next_expected_seq}")
+            # Progress
+            if self.expected_fragments:
+                print(f"\rReceived {len(self.file_fragments)}/{self.expected_fragments} packets", end="", flush=True)
 
-        # Show progress
-        if self.expected_fragments:
-            print(f"\rReceived {len(self.file_fragments)}/{self.expected_fragments} packets", end="", flush=True)
+            # Check if file transfer is complete
+            if self.expected_fragments and len(self.file_fragments) == self.expected_fragments:
+                self.reconstructFile()
+                self.file_complete = True
 
-        # Check if file transfer is complete
-        if self.expected_fragments and len(self.file_fragments) == self.expected_fragments:
-            self.reconstructFile()
-            self.file_complete = True
                 
     def reconstructFile(self):
         global FILE_TRANSFERING
