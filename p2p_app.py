@@ -8,12 +8,11 @@ import time
 MAX_SEQUENCE_NUMBER = 65535 #TODO
 MAX_FRAGMENT_SIZE = 600
 FILE_TRANSFERING = False 
-#! TODO uncomment ip input
+#! TODO uncomment ip input; max frag size
 #TODO Pozor na veľkosť poľa "sequence number" / "poradové číslo fragmentu". V požiadavkách máte, že musíte vedieť preniesť 2MB súbor. Keď nastavím veľmi malú veľkosť fragmentu, tak môžete mať povedzme aj 100 000 fragmentov. A také číslo sa vam do 2-bajtového poľa nezmestí. Rátajte s najmenšou veľkosťou fragmentu 1 bajt, pri testovaní zadania môžeme použiť aj túto hodnotu a musí sa vám súbor korektne poslať
 #TODO DOC: header sizes (32 bits?)
 #TODO zistit ako sa robi ethernetove spojenie
 
-#TODO limit max char limit for text message
 #TODO arq, ukončenie spojenia po timeoute na oboch stranách
 
 #TODO add packet corruption / checksum
@@ -350,7 +349,9 @@ class FileTransfer:
         self.protocol = protocol
         self.timeout = timeout
         self.total_fragments = 0
-        self.acknowledged = 0
+        self.acknowledged = 1
+        
+        self.last_seq_num_sent = 0 # Used for printing info
 
     def sendFragments(self, peer, dest_ip, dest_port, fragments):
         for seq_num, fragment in enumerate(fragments, start=1):
@@ -362,12 +363,12 @@ class FileTransfer:
             )
 
             self.unacknowledged_packets[seq_num] = packet
-
             peer.sendPacket(dest_ip, dest_port, packet)
-            print(f"\rFragments > {seq_num}/{self.total_fragments} sent, {self.acknowledged}/{self.total_fragments} acknowledged", end="", flush=True)
+            self.last_seq_num_sent += 1
 
 
     def receiveAcks(self):
+        global FILE_TRANSFERING
         while True:
             try:
                 ack_data, _ = peer.socket.recvfrom(1024)
@@ -378,6 +379,13 @@ class FileTransfer:
                     if seq_num in self.unacknowledged_packets:
                         self.acknowledged += 1
                         del self.unacknowledged_packets[seq_num]
+                    
+                    print(f"\rFragments > {self.last_seq_num_sent}/{self.total_fragments} sent, {self.acknowledged}/{self.total_fragments} acknowledged", end="", flush=True)
+
+                    if (self.acknowledged == self.total_fragments):
+                        print("\nFile sent successfully.")
+                        FILE_TRANSFERING = False
+                        break
                         
                 elif ack_packet.err == 1:  # Err packet with missing seq_num
                     missing_seq = ack_packet.ack_num
@@ -385,18 +393,15 @@ class FileTransfer:
                         packet = self.unacknowledged_packets[missing_seq]
                         peer.sendPacket(peer.dest_ip, peer.dest_port, packet)
                         print(f"Retransmitted missing packet {missing_seq}")
-
+            
             except socket.timeout:
                 #TODOprint(f"Timeout: Resending packet {i + 1}")
                 continue
             except Exception as e:
+                FILE_TRANSFERING = False
                 break
 
-            if (len(self.unacknowledged_packets) == 0):
-                print("\nFile sent successfully.")
-                FILE_TRANSFERING = False
-                #TODO file transfering successful even when no all acks received
-                break
+            
             
 
     def sendFile(self, peer, dest_ip, dest_port, file_path):
@@ -432,7 +437,7 @@ class FileTransfer:
         except Exception as e:
             print(f"Error sending file: {e}")
         
-        FILE_TRANSFERING = False
+
 
 
 class FileReceiver:
@@ -457,6 +462,8 @@ class FileReceiver:
                 print(f"Error: {e}")
 
     def handleFragment(self, packet):
+        global FILE_TRANSFERING
+
         if packet.ftr != 1:
             return
 
@@ -471,7 +478,6 @@ class FileReceiver:
             return
 
         
-        #TODO if fragment okay
         if (packet.checksum == packet.calculateChecksum(packet.data.encode('utf-8'))):
             seq_num = packet.seq_num
             self.file_fragments[seq_num] = packet.data
@@ -484,14 +490,15 @@ class FileReceiver:
 
             self.expected_seq += 1
 
-            # Progress
-            if self.expected_fragments:
-                print(f"\rReceived {len(self.file_fragments)}/{self.expected_fragments} packets", end="", flush=True)
+            # Progress                
+            print(f"\rReceived {len(self.file_fragments)}/{self.expected_fragments} packets", end="", flush=True)
 
             # Check if file transfer is complete
-            if self.expected_fragments and len(self.file_fragments) == self.expected_fragments:
+            if len(self.file_fragments) == self.expected_fragments:
                 self.reconstructFile()
                 self.file_complete = True
+                FILE_TRANSFERING = False
+            
 
                 
     def reconstructFile(self):
