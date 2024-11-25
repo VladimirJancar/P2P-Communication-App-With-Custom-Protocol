@@ -6,7 +6,7 @@ import os
 import time
 
 MAX_SEQUENCE_NUMBER = 65535 #TODO
-MAX_FRAGMENT_SIZE = 600
+MAX_FRAGMENT_SIZE = 500
 FILE_TRANSFERING = False 
 #! TODO uncomment ip input; max frag size
 #TODO DOC: header sizes (32 bits?), field explanations, update date
@@ -234,10 +234,11 @@ class Peer:
             print(f"Error sending file: {e}")   
 
     def sendTextMessage(self, message):
-        self.message_seq_num = (self.message_seq_num + 1)
+        self.message_seq_num = self.message_seq_num + 1
         if self.message_seq_num == 0: 
             self.message_seq_num = 1
 
+        if message == "": return
         packet = Packet(seq_num=self.message_seq_num, data=message)
         self.socket.sendto(packet.toBytes(), (self.dest_ip, self.dest_port))
         self.message_seq_num += 1
@@ -357,7 +358,6 @@ class FileTransfer:
                 seq_num=seq_num, 
                 lfg=(1 if seq_num == self.total_fragments else 0),  # Last fragment flag
                 ftr=1,
-                checksum=Packet.calculateChecksum(fragment.encode('utf-8')),
                 data=fragment
             )
 
@@ -368,10 +368,11 @@ class FileTransfer:
 
     def receiveAcks(self):
         global FILE_TRANSFERING
+        fromBytes = Packet.fromBytes
         while True:
             try:
                 ack_data, _ = peer.socket.recvfrom(1024)
-                ack_packet = Packet.fromBytes(ack_data)
+                ack_packet = fromBytes(ack_data)
 
                 if ack_packet.ack == 1: # ACK
                     seq_num = ack_packet.ack_num
@@ -446,11 +447,12 @@ class FileReceiver:
 
         self.wrap_count = 0
 
-    def receivePackets(self, socket):        
+    def receivePackets(self, socket): 
+        fromBytes = Packet.fromBytes       
         while FILE_TRANSFERING:
             try:
                 data, addr = socket.recvfrom(1024)
-                packet = Packet.fromBytes(data)
+                packet = fromBytes(data)
                 self.handleFragment(packet)
             except socket.timeout:
                 continue
@@ -459,6 +461,7 @@ class FileReceiver:
 
     def handleFragment(self, packet):
         global FILE_TRANSFERING
+        crc = Packet.calculateChecksum
 
         if packet.ftr != 1:
             return
@@ -474,7 +477,7 @@ class FileReceiver:
             return
 
         
-        if (packet.checksum == Packet.calculateChecksum(packet.data.encode('utf-8'))):
+        if (packet.checksum == crc(packet.data.encode('utf-8'))):
             seq_num = packet.seq_num
             self.file_fragments[seq_num] = packet.data
             
@@ -526,5 +529,7 @@ if __name__ == '__main__':
         
     protocol = Protocol(frag_size=MAX_FRAGMENT_SIZE)
     peer = Peer(src_ip, src_port, dest_ip, dest_port, protocol)
-
+    peer.socket.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 2**16)  # Example: 64 KB buffer
+    peer.socket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 2**16)
+    
     peer.start()
