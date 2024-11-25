@@ -357,7 +357,7 @@ class FileTransfer:
                 seq_num=seq_num, 
                 lfg=(1 if seq_num == self.total_fragments else 0),  # Last fragment flag
                 ftr=1,
-                checksum=packet.calculateChecksum(fragment.data.encode('utf-8')),
+                checksum=Packet.calculateChecksum(fragment.encode('utf-8')),
                 data=fragment
             )
 
@@ -474,7 +474,7 @@ class FileReceiver:
             return
 
         
-        if (packet.checksum == packet.calculateChecksum(packet.data.encode('utf-8'))):
+        if (packet.checksum == Packet.calculateChecksum(packet.data.encode('utf-8'))):
             seq_num = packet.seq_num
             self.file_fragments[seq_num] = packet.data
             
