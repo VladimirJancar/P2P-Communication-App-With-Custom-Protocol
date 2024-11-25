@@ -9,9 +9,7 @@ MAX_SEQUENCE_NUMBER = 65535 #TODO
 MAX_FRAGMENT_SIZE = 600
 FILE_TRANSFERING = False 
 #! TODO uncomment ip input; max frag size
-#TODO Pozor na veľkosť poľa "sequence number" / "poradové číslo fragmentu". V požiadavkách máte, že musíte vedieť preniesť 2MB súbor. Keď nastavím veľmi malú veľkosť fragmentu, tak môžete mať povedzme aj 100 000 fragmentov. A také číslo sa vam do 2-bajtového poľa nezmestí. Rátajte s najmenšou veľkosťou fragmentu 1 bajt, pri testovaní zadania môžeme použiť aj túto hodnotu a musí sa vám súbor korektne poslať
-#TODO DOC: header sizes (32 bits?)
-#TODO zistit ako sa robi ethernetove spojenie
+#TODO DOC: header sizes (32 bits?), field explanations, update date
 
 #TODO arq, ukončenie spojenia po timeoute na oboch stranách
 
@@ -359,6 +357,7 @@ class FileTransfer:
                 seq_num=seq_num, 
                 lfg=(1 if seq_num == self.total_fragments else 0),  # Last fragment flag
                 ftr=1,
+                #TODOchecksum=packet.calculateChecksum(fragment.data.encode('utf-8')),
                 data=fragment
             )
 
@@ -402,8 +401,6 @@ class FileTransfer:
                 break
 
             
-            
-
     def sendFile(self, peer, dest_ip, dest_port, file_path):
         global FILE_TRANSFERING
         try:
@@ -436,8 +433,6 @@ class FileTransfer:
             print("Error: File not found.")
         except Exception as e:
             print(f"Error sending file: {e}")
-        
-
 
 
 class FileReceiver:
@@ -447,6 +442,7 @@ class FileReceiver:
         self.file_complete = False
         self.current_filename = None  # Track the file being received
         self.expected_seq = 1
+        self.acknowledged_frags = 0
 
         self.wrap_count = 0
 
@@ -455,7 +451,7 @@ class FileReceiver:
             try:
                 data, addr = socket.recvfrom(1024)
                 packet = Packet.fromBytes(data)
-                self.handleFragment(packet) #TODO close upon completion
+                self.handleFragment(packet)
             except socket.timeout:
                 continue
             except Exception as e:
@@ -488,17 +484,19 @@ class FileReceiver:
             )
             peer.sendPacket(peer.dest_ip, peer.dest_port, ack_packet)
 
-            self.expected_seq += 1
+            self.acknowledged_frags += 1
 
-            # Progress                
-            print(f"\rReceived {len(self.file_fragments)}/{self.expected_fragments} packets", end="", flush=True)
+            # Progress
+            print(f"\rFragments > {len(self.file_fragments)}/{self.expected_fragments} received, {self.acknowledged_frags}/{self.expected_fragments} acknowledged", end="", flush=True)                
 
             # Check if file transfer is complete
             if len(self.file_fragments) == self.expected_fragments:
                 self.reconstructFile()
                 self.file_complete = True
                 FILE_TRANSFERING = False
-            
+
+        elif (packet.ftf == 1):
+            print(f"Invalid checksum for packet {packet.seq_num}")
 
                 
     def reconstructFile(self):
